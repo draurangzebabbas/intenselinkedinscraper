@@ -2,17 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { ScrapingForm } from './components/ScrapingForm';
 import { DataTable } from './components/DataTable';
 import { JobsTable } from './components/JobsTable';
-import { CommentResults } from './components/CommentResults';
-import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
-import { LoadingProgress } from './components/LoadingProgress';
-import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { Auth } from './components/Auth';
 import { UserMenu } from './components/UserMenu';
-import { UserProfile } from './components/UserProfile';
 import { supabase, testSupabaseConnection } from './lib/supabase';
-import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
-import { processProfileImages } from './utils/imageUtils';
 import { Linkedin, Database, Activity, AlertCircle } from 'lucide-react';
 
 interface Profile {
@@ -34,21 +27,6 @@ interface Job {
   completed_at: string | null;
 }
 
-interface CommentData {
-  type: string;
-  id: string;
-  linkedinUrl: string;
-  commentary: string;
-  createdAt: string;
-  actor: {
-    id: string;
-    name: string;
-    linkedinUrl: string;
-    position: string;
-    pictureUrl: string;
-  };
-}
-
 function App() {
   // Authentication state
   const [user, setUser] = useState<any>(null);
@@ -57,22 +35,10 @@ function App() {
   // Application state
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [commentersData, setCommentersData] = useState<CommentData[]>([]);
-  const [profileDetails, setProfileDetails] = useState<any[]>([]);
-  const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
-  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
-  
-  // Loading progress states
-  const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
-  const [loadingProgress, setLoadingProgress] = useState(0);
-  const [loadingMessage, setLoadingMessage] = useState('');
-  const [loadingError, setLoadingError] = useState('');
-  const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
   useEffect(() => {
     // Initialize authentication
@@ -107,11 +73,7 @@ function App() {
             // Clear application state on sign out
             setProfiles([]);
             setJobs([]);
-            setCommentersData([]);
-            setProfileDetails([]);
-            setSelectedProfileForDetails(null);
             setActiveTab('scraper');
-            setCurrentView('form');
             setConnectionError('');
           }
         }
@@ -153,10 +115,6 @@ function App() {
 
       if (profilesError) {
         console.error('Profiles error:', profilesError);
-        // Check if it's a network error
-        if (profilesError.message.includes('Failed to fetch') || profilesError.message.includes('fetch')) {
-          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
-        }
         throw new Error(`Failed to load profiles: ${profilesError.message}`);
       }
       setProfiles(profilesData || []);
@@ -170,10 +128,6 @@ function App() {
 
       if (jobsError) {
         console.error('Jobs error:', jobsError);
-        // Check if it's a network error
-        if (jobsError.message.includes('Failed to fetch') || jobsError.message.includes('fetch')) {
-          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
-        }
         throw new Error(`Failed to load jobs: ${jobsError.message}`);
       }
       setJobs(jobsData || []);
@@ -183,29 +137,10 @@ function App() {
       
       if (error instanceof Error) {
         errorMessage = error.message;
-      } else if (typeof error === 'string') {
-        errorMessage = error;
-      }
-      
-      // Handle specific network errors
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('TypeError: Failed to fetch')) {
-        errorMessage = 'Network connection failed. This usually means:\n\n' +
-          '• Supabase environment variables are not configured correctly\n' +
-          '• Your Supabase project URL or API key is invalid\n' +
-          '• CORS is not configured properly in your Supabase project\n' +
-          '• Your Supabase project may be paused or inactive\n' +
-          '• Network connectivity issues\n\n' +
-          'Please check your Supabase configuration and try again.';
       }
       
       setConnectionError(errorMessage);
     }
-  };
-
-  const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
-    setLoadingStage(stage);
-    setLoadingProgress(progress);
-    setLoadingMessage(message);
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
@@ -216,9 +151,6 @@ function App() {
     }
 
     setIsLoading(true);
-    setScrapingType(type);
-    setLoadingError('');
-    updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     try {
       // Create job record
@@ -234,206 +166,21 @@ function App() {
 
       if (jobError) throw jobError;
 
-      // Refresh jobs list
-      await loadData();
-
-      if (type === 'post_comments') {
-        updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
-        
-        // Scrape post comments and show them to user
-        const datasetId = await apifyService.scrapePostComments(url);
-        
-        updateLoadingProgress('saving_data', 75, 'Processing comment data...');
-        const commentsData = await apifyService.getDatasetItems(datasetId);
-        
-        setCommentersData(commentsData);
-        setCurrentView('comments');
-        
-        updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
-
-        // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: commentsData.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
-
-      } else if (type === 'profile_details') {
-        updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
-        
-        // Scrape single profile and show details
-        const profilesData = await getProfilesWithDetails([url]);
-        
-        updateLoadingProgress('saving_data', 75, 'Saving profile data...');
-        setProfileDetails(profilesData);
-        setPreviousView('form'); // Set previous view to form for single profile scraping
-        setCurrentView('profile-table');
-        
-        updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
-        
-        // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: profilesData.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
-
-      } else if (type === 'mixed') {
-        updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
-        
-        // Scrape post comments first
-        const datasetId = await apifyService.scrapePostComments(url);
-        const commentsData = await apifyService.getDatasetItems(datasetId);
-        
-        updateLoadingProgress('extracting_profiles', 40, 'Extracting profile URLs from comments...');
-        
-        // Extract profile URLs from comments
-        const profileUrls = commentsData
-          .map(comment => comment.actor?.linkedinUrl)
-          .filter(Boolean)
-          .slice(0, 50); // Limit to first 50 profiles
-        
-        if (profileUrls.length > 0) {
-          updateLoadingProgress('scraping_profiles', 60, `Scraping ${profileUrls.length} profile details...`);
-          
-          const profilesData = await getProfilesWithDetails(profileUrls);
-          
-          updateLoadingProgress('saving_data', 85, 'Saving all data...');
-          setProfileDetails(profilesData);
-          setPreviousView('form'); // Set previous view to form for mixed scraping
-          setCurrentView('profile-table');
-        }
-
-        updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
-
-        // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: profileUrls.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
-      }
+      // For now, just mark as completed since we removed Apify integration
+      await supabase
+        .from('scraping_jobs')
+        .update({
+          status: 'completed',
+          results_count: 0,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', job.id);
 
       await loadData();
+      alert('Scraping job created successfully! (Note: Actual scraping functionality requires API setup)');
     } catch (error) {
       console.error('Scraping error:', error);
-      
-      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
-      updateLoadingProgress('error', 0, 'Scraping failed');
-      
-      // Update job status to failed
-      const { data: jobs } = await supabase
-        .from('scraping_jobs')
-        .select('id')
-        .eq('input_url', url)
-        .eq('status', 'running')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (jobs && jobs.length > 0) {
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Unknown error',
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', jobs[0].id);
-      }
-      
-      await loadData();
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const getProfilesWithDetails = async (profileUrls: string[]): Promise<any[]> => {
-    // Check which profiles already exist in database
-    const { data: existingProfiles } = await supabase
-      .from('linkedin_profiles')
-      .select('*')
-      .in('linkedin_url', profileUrls);
-
-    const existingUrlsMap = new Map();
-    if (existingProfiles) {
-      existingProfiles.forEach(profile => {
-        existingUrlsMap.set(profile.linkedin_url, profile.profile_data);
-      });
-    }
-
-    const newUrls = profileUrls.filter(url => !existingUrlsMap.has(url));
-    const allProfileDetails = [];
-
-    // Add existing profiles from database
-    profileUrls.forEach(url => {
-      if (existingUrlsMap.has(url)) {
-        allProfileDetails.push(existingUrlsMap.get(url));
-      }
-    });
-
-    // Scrape new profiles if any
-    if (newUrls.length > 0) {
-      const datasetId = await apifyService.scrapeProfiles(newUrls);
-      const newProfilesData = await apifyService.getDatasetItems(datasetId);
-      
-      // Store new profiles in database and add to results
-      for (let i = 0; i < newProfilesData.length; i++) {
-        const profileData = newProfilesData[i];
-        const linkedinUrl = profileData.linkedinUrl;
-        if (linkedinUrl) {
-          // Process images to base64
-          updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Converting images for profile ${i + 1}/${newProfilesData.length}...`);
-          const processedProfile = await processProfileImages(profileData);
-          
-          // Store in database using UPSERT to prevent duplicates
-          await supabase
-            .from('linkedin_profiles')
-            .upsert({
-              linkedin_url: linkedinUrl,
-              profile_data: processedProfile,
-              last_updated: new Date().toISOString()
-            }, {
-              onConflict: 'linkedin_url'
-            });
-          
-          // Add to results
-          allProfileDetails.push(processedProfile);
-        }
-      }
-    }
-
-    return allProfileDetails;
-  };
-
-  const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
-    setIsLoading(true);
-    setScrapingType('profile_details');
-    setLoadingError('');
-    updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
-    
-    try {
-      const profilesData = await getProfilesWithDetails(profileUrls);
-      updateLoadingProgress('saving_data', 75, 'Processing profile data...');
-      setProfileDetails(profilesData);
-      setPreviousView('comments'); // Remember we came from comments
-      setCurrentView('profile-table');
-      updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
-      
-      // Refresh the main profiles data
-      await loadData();
-    } catch (error) {
-      console.error('Error scraping selected profiles:', error);
-      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
-      updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
+      alert('Error creating scraping job: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setIsLoading(false);
     }
@@ -441,33 +188,11 @@ function App() {
 
   const handleUpdateProfile = async (profileUrl: string) => {
     try {
-      // Force update by scraping new data
-      const datasetId = await apifyService.scrapeProfiles([profileUrl]);
-      const profilesData = await apifyService.getDatasetItems(datasetId);
-      
-      if (profilesData.length > 0) {
-        const profileData = profilesData[0];
-        const linkedinUrl = profileData.linkedinUrl;
-        
-        // Process images to base64
-        const processedProfile = await processProfileImages(profileData);
-        
-        // Update in database using UPSERT to prevent duplicates
-        await supabase
-          .from('linkedin_profiles')
-          .upsert({
-            linkedin_url: linkedinUrl,
-            profile_data: processedProfile,
-            last_updated: new Date().toISOString()
-          }, {
-            onConflict: 'linkedin_url'
-          });
-      }
-      
-      await loadData();
+      // Placeholder for profile update functionality
+      alert('Profile update functionality requires API setup');
     } catch (error) {
       console.error('Error updating profile:', error);
-      throw error; // Re-throw to handle in component
+      throw error;
     }
   };
 
@@ -475,37 +200,8 @@ function App() {
     setIsUpdating(true);
     
     try {
-      // Update profiles in batches to avoid overwhelming the API
-      const batchSize = 5;
-      for (let i = 0; i < profileUrls.length; i += batchSize) {
-        const batch = profileUrls.slice(i, i + batchSize);
-        
-        // Scrape batch
-        const datasetId = await apifyService.scrapeProfiles(batch);
-        const profilesData = await apifyService.getDatasetItems(datasetId);
-        
-        // Update each profile in the database
-        for (const profileData of profilesData) {
-          const linkedinUrl = profileData.linkedinUrl;
-          if (linkedinUrl) {
-            // Process images to base64
-            const processedProfile = await processProfileImages(profileData);
-            
-            // Update in database using UPSERT to prevent duplicates
-            await supabase
-              .from('linkedin_profiles')
-              .upsert({
-                linkedin_url: linkedinUrl,
-                profile_data: processedProfile,
-                last_updated: new Date().toISOString()
-              }, {
-                onConflict: 'linkedin_url'
-              });
-          }
-        }
-      }
-      
-      await loadData();
+      // Placeholder for bulk update functionality
+      alert('Bulk update functionality requires API setup');
     } catch (error) {
       console.error('Error updating selected profiles:', error);
     } finally {
@@ -529,84 +225,20 @@ function App() {
   };
 
   const handleExport = (format: string, selectedOnly: boolean = false) => {
-    if (selectedOnly) {
-      // Export only selected profiles - this would need to be implemented
-      // For now, export all profiles
-      exportData(profiles, format, 'linkedin_profiles_selected');
-    } else {
-      exportData(profiles, format, 'linkedin_profiles');
-    }
-  };
-
-  const handleExportProfileResults = (format: string) => {
-    exportData(profileDetails.map(profile => ({ profile_data: profile })), format, 'profile_results');
-  };
-
-  const handleBackToForm = () => {
-    setCurrentView('form');
-    setCommentersData([]);
-    setProfileDetails([]);
-    setSelectedProfileForDetails(null);
-    setPreviousView('form');
-    setLoadingStage('starting');
-    setLoadingProgress(0);
-    setLoadingMessage('');
-    setLoadingError('');
-  };
-
-  const handleBackToPrevious = () => {
-    if (previousView === 'comments') {
-      setCurrentView('comments');
-    } else if (previousView === 'profiles-list') {
-      setCurrentView('profiles-list');
-      setActiveTab('profiles');
-    } else if (previousView === 'profile-table') {
-      setCurrentView('profile-table');
-    } else {
-      setCurrentView('form');
-    }
+    exportData(profiles, format, 'linkedin_profiles');
   };
 
   const handleViewProfileDetails = (profile: any) => {
-    // Set the previous view based on current context
-    if (activeTab === 'profiles') {
-      setPreviousView('profiles-list');
-      setSelectedProfileForDetails(profile);
-      setCurrentView('single-profile-details');
-    } else {
-      setPreviousView(currentView);
-      setProfileDetails([profile]);
-      setCurrentView('profile-details');
-    }
-  };
-
-  const handleBackToProfilesList = () => {
-    setCurrentView('profiles-list');
-    setSelectedProfileForDetails(null);
-  };
-
-  const handleOpenUserProfile = () => {
-    setCurrentView('user-profile');
-  };
-
-  const handleBackFromUserProfile = () => {
-    setCurrentView('form');
-    setActiveTab('scraper');
+    alert('Profile details view functionality is temporarily disabled');
   };
 
   // Handle tab changes and ensure data is loaded
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
     
-    // Set appropriate view based on tab
+    // Ensure profiles data is fresh when switching to profiles tab
     if (tab === 'profiles') {
-      setCurrentView('profiles-list');
-      // Ensure profiles data is fresh when switching to profiles tab
       await loadData();
-    } else if (tab === 'scraper') {
-      setCurrentView('form');
-    } else if (tab === 'jobs') {
-      setCurrentView('form'); // Jobs tab doesn't need special view handling
     }
   };
 
@@ -635,11 +267,6 @@ function App() {
     return <Auth onAuthSuccess={() => {}} />;
   }
 
-  // Show user profile if that view is active
-  if (currentView === 'user-profile') {
-    return <UserProfile user={user} onBack={handleBackFromUserProfile} />;
-  }
-
   // Show connection error banner if there's a connection issue
   if (connectionError) {
     return (
@@ -660,7 +287,6 @@ function App() {
             <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
               <li>Supabase environment variables are not configured</li>
               <li>The Supabase URL or API key is incorrect</li>
-              <li>CORS is not configured properly in your Supabase project</li>
               <li>Your Supabase project may be paused or inactive</li>
               <li>Network connectivity issues</li>
             </ul>
@@ -670,17 +296,6 @@ function App() {
               <pre className="text-sm text-red-600 whitespace-pre-wrap font-mono bg-white p-3 rounded border overflow-auto max-h-40">
                 {connectionError}
               </pre>
-            </div>
-            
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-gray-700">To fix this:</p>
-              <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
-                <li>Click "Connect to Supabase" in the top right corner</li>
-                <li>Follow the setup instructions to get your Supabase URL and API key</li>
-                <li>Ensure your .env file has the correct VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY values</li>
-                <li>In your Supabase project, go to Settings → API → CORS and add your domain</li>
-                <li>Make sure your Supabase project is not paused</li>
-              </ol>
             </div>
             
             <div className="flex gap-3">
@@ -753,7 +368,7 @@ function App() {
                 </button>
               </nav>
 
-              <UserMenu user={user} onOpenProfile={handleOpenUserProfile} />
+              <UserMenu user={user} />
             </div>
           </div>
         </div>
@@ -763,127 +378,63 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'scraper' && (
           <div className="space-y-8">
-            {currentView === 'form' && (
-              <>
-                <ScrapingForm onScrape={handleScrape} isLoading={isLoading} />
-                
-                {/* Loading Progress */}
-                {isLoading && (
-                  <LoadingProgress
-                    type={scrapingType}
-                    stage={loadingStage}
-                    progress={loadingProgress}
-                    message={loadingMessage}
-                    error={loadingError}
-                  />
-                )}
-                
-                {/* Recent Activity */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <Database className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Total Profiles</div>
-                      </div>
-                    </div>
+            <ScrapingForm onScrape={handleScrape} isLoading={isLoading} />
+            
+            {/* Recent Activity */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Database className="w-5 h-5 text-blue-600" />
                   </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-green-100 rounded-lg">
-                        <Activity className="w-5 h-5 text-green-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">
-                          {jobs.filter(j => j.status === 'completed').length}
-                        </div>
-                        <div className="text-sm text-gray-600">Completed Jobs</div>
-                      </div>
-                    </div>
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
+                    <div className="text-sm text-gray-600">Total Profiles</div>
                   </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-yellow-100 rounded-lg">
-                        <Activity className="w-5 h-5 text-yellow-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">
-                          {jobs.filter(j => j.status === 'running').length}
-                        </div>
-                        <div className="text-sm text-gray-600">Running Jobs</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {currentView === 'comments' && (
-              <CommentResults
-                comments={commentersData}
-                onScrapeSelectedProfiles={handleScrapeSelectedCommenterProfiles}
-                isLoading={isLoading}
-                onBack={handleBackToForm}
-                loadingStage={loadingStage}
-                loadingProgress={loadingProgress}
-                loadingMessage={loadingMessage}
-                loadingError={loadingError}
-              />
-            )}
-
-            {currentView === 'profile-table' && (
-              <div className="space-y-6">
-                <ProfileResultsTable
-                  profiles={profileDetails}
-                  onViewDetails={handleViewProfileDetails}
-                  onExport={handleExportProfileResults}
-                  showActions={false}
-                />
-                
-                <div className="flex justify-center">
-                  <button
-                    onClick={handleBackToPrevious}
-                    className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
-                  </button>
                 </div>
               </div>
-            )}
-
-            {currentView === 'profile-details' && (
-              <ProfileDetailsDisplay
-                profiles={profileDetails}
-                onBack={handleBackToPrevious}
-              />
-            )}
+              
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <Activity className="w-5 h-5 text-green-600" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900">
+                      {jobs.filter(j => j.status === 'completed').length}
+                    </div>
+                    <div className="text-sm text-gray-600">Completed Jobs</div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-yellow-100 rounded-lg">
+                    <Activity className="w-5 h-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900">
+                      {jobs.filter(j => j.status === 'running').length}
+                    </div>
+                    <div className="text-sm text-gray-600">Running Jobs</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
         {activeTab === 'profiles' && (
-          <>
-            {currentView === 'single-profile-details' ? (
-              <ProfileDetailsDisplay
-                profiles={selectedProfileForDetails ? [selectedProfileForDetails] : []}
-                onBack={handleBackToProfilesList}
-              />
-            ) : (
-              <DataTable
-                profiles={profiles}
-                onUpdateProfile={handleUpdateProfile}
-                onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
-                onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
-                onExport={handleExport}
-                onViewDetails={handleViewProfileDetails}
-                isUpdating={isUpdating}
-              />
-            )}
-          </>
+          <DataTable
+            profiles={profiles}
+            onUpdateProfile={handleUpdateProfile}
+            onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+            onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
+            onExport={handleExport}
+            onViewDetails={handleViewProfileDetails}
+            isUpdating={isUpdating}
+          />
         )}
 
         {activeTab === 'jobs' && (
