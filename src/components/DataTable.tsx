@@ -131,8 +131,13 @@ export const DataTable: React.FC<DataTableProps> = ({
     
     const date = new Date(dateString);
     const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    // Reset time to start of day for accurate comparison
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const updateDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    
+    const diffTime = today.getTime() - updateDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
     const exactDate = date.toLocaleDateString('en-GB', {
       day: '2-digit',
