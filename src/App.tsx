@@ -449,7 +449,13 @@ function App() {
   };
 
   const handleViewProfileDetails = (profile: any) => {
-    setPreviousView(activeTab === 'profiles' ? 'profiles' : currentView); // Remember where we came from
+    // Set the previous view based on current context
+    if (activeTab === 'profiles') {
+      setPreviousView('profiles');
+    } else {
+      setPreviousView(currentView);
+    }
+    
     setProfileDetails([profile]);
     setCurrentView('profile-details');
   };
@@ -622,15 +628,27 @@ function App() {
         )}
 
         {activeTab === 'profiles' && (
-          <DataTable
-            profiles={profiles}
-            onUpdateProfile={handleUpdateProfile}
-            onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
-            onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
-            onExport={handleExport}
-            onViewDetails={handleViewProfileDetails}
-            isUpdating={isUpdating}
-          />
+          <>
+            {currentView === 'profile-details' ? (
+              <ProfileDetailsDisplay
+                profiles={profileDetails}
+                onBack={() => {
+                  setCurrentView('form');
+                  setActiveTab('profiles');
+                }}
+              />
+            ) : (
+              <DataTable
+                profiles={profiles}
+                onUpdateProfile={handleUpdateProfile}
+                onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+                onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
+                onExport={handleExport}
+                onViewDetails={handleViewProfileDetails}
+                isUpdating={isUpdating}
+              />
+            )}
+          </>
         )}
 
         {activeTab === 'jobs' && (
