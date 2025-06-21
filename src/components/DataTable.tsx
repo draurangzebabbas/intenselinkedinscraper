@@ -127,7 +127,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   };
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return { text: 'Never', color: 'text-gray-600 bg-gray-50', exact: 'Never' };
+    if (!dateString) return { text: 'Never', color: 'text-gray-600 bg-gray-100', exact: 'Never' };
     
     const date = new Date(dateString);
     const now = new Date();
@@ -141,13 +141,13 @@ export const DataTable: React.FC<DataTableProps> = ({
     });
     
     if (diffDays === 0) {
-      return { text: 'Today', color: 'text-green-600 bg-green-50', exact: exactDate };
+      return { text: 'Today', color: 'text-green-700 bg-green-100 border-green-200', exact: exactDate };
     } else if (diffDays <= 7) {
-      return { text: 'This week', color: 'text-green-600 bg-green-50', exact: exactDate };
+      return { text: 'This week', color: 'text-green-600 bg-green-50 border-green-200', exact: exactDate };
     } else if (diffDays <= 30) {
-      return { text: 'This month', color: 'text-green-400 bg-green-50', exact: exactDate };
+      return { text: 'This month', color: 'text-blue-600 bg-blue-50 border-blue-200', exact: exactDate };
     } else {
-      return { text: exactDate, color: 'text-yellow-600 bg-yellow-50', exact: exactDate };
+      return { text: exactDate, color: 'text-amber-700 bg-amber-100 border-amber-200', exact: exactDate };
     }
   };
 
@@ -252,11 +252,13 @@ export const DataTable: React.FC<DataTableProps> = ({
         const dateInfo = formatDate(profile.last_updated);
         return (
           <div className="group relative">
-            <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${dateInfo.color}`}>
+            <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${dateInfo.color}`}>
               {dateInfo.text}
             </span>
-            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
-              {dateInfo.exact}
+            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg">
+              <div className="font-medium">Last Updated</div>
+              <div>{dateInfo.exact}</div>
+              <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
             </div>
           </div>
         );
