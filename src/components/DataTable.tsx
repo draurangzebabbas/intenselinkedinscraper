@@ -45,8 +45,8 @@ export const DataTable: React.FC<DataTableProps> = ({
     if (!filter) return profiles;
     
     return profiles.filter(profile => {
-      const data = profile.profile_data?.element || {};
-      const searchText = `${data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.location?.linkedinText || ''}`.toLowerCase();
+      const data = profile.profile_data || {};
+      const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''}`.toLowerCase();
       return searchText.includes(filter.toLowerCase());
     });
   }, [profiles, filter]);
@@ -69,26 +69,32 @@ export const DataTable: React.FC<DataTableProps> = ({
     const diffTime = Math.abs(now.getTime() - date.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
+    const exactDate = date.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    
     if (diffDays === 0) {
-      return { text: 'Today', color: 'text-green-600 bg-green-50', exact: date.toLocaleDateString('en-GB') };
+      return { text: 'Today', color: 'text-green-600 bg-green-50', exact: exactDate };
     } else if (diffDays <= 7) {
-      return { text: 'This week', color: 'text-green-600 bg-green-50', exact: date.toLocaleDateString('en-GB') };
+      return { text: 'This week', color: 'text-green-600 bg-green-50', exact: exactDate };
     } else if (diffDays <= 30) {
-      return { text: 'This month', color: 'text-green-400 bg-green-50', exact: date.toLocaleDateString('en-GB') };
+      return { text: 'This month', color: 'text-green-400 bg-green-50', exact: exactDate };
     } else {
-      return { text: date.toLocaleDateString('en-GB'), color: 'text-yellow-600 bg-yellow-50', exact: date.toLocaleDateString('en-GB') };
+      return { text: exactDate, color: 'text-yellow-600 bg-yellow-50', exact: exactDate };
     }
   };
 
   const renderCell = (profile: Profile, columnKey: string) => {
-    const data = profile.profile_data?.element || {};
+    const data = profile.profile_data || {};
     
     switch (columnKey) {
       case 'picture':
         return (
           <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200">
-            {data.photo ? (
-              <img src={data.photo} alt={`${data.firstName} ${data.lastName}`} className="w-full h-full object-cover" />
+            {data.profilePic ? (
+              <img src={data.profilePic} alt={data.fullName || `${data.firstName} ${data.lastName}`} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
                 No Photo
@@ -101,7 +107,7 @@ export const DataTable: React.FC<DataTableProps> = ({
         return (
           <div>
             <div className="font-medium text-gray-900">
-              {data.firstName} {data.lastName}
+              {data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim()}
             </div>
             <div className="text-sm text-blue-600 hover:underline">
               <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer">
@@ -123,42 +129,42 @@ export const DataTable: React.FC<DataTableProps> = ({
       case 'location':
         return (
           <div className="text-sm text-gray-600">
-            {data.location?.linkedinText || 'Not specified'}
+            {data.addressWithCountry || data.addressCountryOnly || 'Not specified'}
           </div>
         );
       
       case 'connections':
         return (
           <div className="text-sm text-gray-900">
-            {data.connectionsCount?.toLocaleString() || '0'}
+            {data.connections?.toLocaleString() || '0'}
           </div>
         );
       
       case 'followers':
         return (
           <div className="text-sm text-gray-900">
-            {data.followerCount?.toLocaleString() || '0'}
+            {data.followers?.toLocaleString() || '0'}
           </div>
         );
       
       case 'company':
         return (
           <div className="text-sm text-gray-900">
-            {data.currentPosition?.[0]?.companyName || data.experience?.[0]?.companyName || 'Not specified'}
+            {data.companyName || data.experiences?.[0]?.companyName || 'Not specified'}
           </div>
         );
       
       case 'experience':
         return (
           <div className="text-sm text-gray-600">
-            {data.experience?.length || 0} positions
+            {data.experiences?.length || 0} positions
           </div>
         );
       
       case 'education':
         return (
           <div className="text-sm text-gray-600">
-            {data.education?.length || 0} schools
+            {data.educations?.length || 0} schools
           </div>
         );
       
@@ -169,7 +175,7 @@ export const DataTable: React.FC<DataTableProps> = ({
             <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${dateInfo.color}`}>
               {dateInfo.text}
             </span>
-            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
               {dateInfo.exact}
             </div>
           </div>

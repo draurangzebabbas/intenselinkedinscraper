@@ -9,6 +9,7 @@ import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { supabase } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
+import { processProfileImages } from './utils/imageUtils';
 import { Linkedin, Database, Activity } from 'lucide-react';
 
 interface Profile {
@@ -54,6 +55,7 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
+  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -271,17 +273,21 @@ function App() {
       for (const profileData of newProfilesData) {
         const linkedinUrl = profileData.linkedinUrl;
         if (linkedinUrl) {
+          // Process images to base64
+          updateLoadingProgress('saving_data', 80, 'Converting profile images...');
+          const processedProfile = await processProfileImages(profileData);
+          
           // Store in database
           await supabase
             .from('linkedin_profiles')
             .insert({
               linkedin_url: linkedinUrl,
-              profile_data: profileData,
+              profile_data: processedProfile,
               last_updated: new Date().toISOString()
             });
           
           // Add to results
-          allProfileDetails.push(profileData);
+          allProfileDetails.push(processedProfile);
         }
       }
     }
@@ -298,6 +304,7 @@ function App() {
       const profilesData = await getProfilesWithDetails(profileUrls);
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
+      setPreviousView('comments'); // Remember we came from comments
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
     } catch (error) {
@@ -321,11 +328,14 @@ function App() {
         const profileData = profilesData[0];
         const linkedinUrl = profileData.linkedinUrl;
         
+        // Process images to base64
+        const processedProfile = await processProfileImages(profileData);
+        
         // Update in database
         await supabase
           .from('linkedin_profiles')
           .update({
-            profile_data: profileData,
+            profile_data: processedProfile,
             last_updated: new Date().toISOString()
           })
           .eq('linkedin_url', linkedinUrl);
@@ -351,13 +361,23 @@ function App() {
     setCurrentView('form');
     setCommentersData([]);
     setProfileDetails([]);
+    setPreviousView('form');
     setLoadingStage('starting');
     setLoadingProgress(0);
     setLoadingMessage('');
     setLoadingError('');
   };
 
+  const handleBackToPrevious = () => {
+    if (previousView === 'comments') {
+      setCurrentView('comments');
+    } else {
+      setCurrentView('form');
+    }
+  };
+
   const handleViewProfileDetails = (profile: any) => {
+    setPreviousView(currentView); // Remember where we came from
     setProfileDetails([profile]);
     setCurrentView('profile-details');
   };
@@ -487,13 +507,6 @@ function App() {
               />
             )}
 
-            {currentView === 'profile-details' && (
-              <ProfileDetailsDisplay
-                profiles={profileDetails}
-                onBack={handleBackToForm}
-              />
-            )}
-
             {currentView === 'profile-table' && (
               <div className="space-y-6">
                 {isLoading && (
@@ -515,13 +528,20 @@ function App() {
                 
                 <div className="flex justify-center">
                   <button
-                    onClick={handleBackToForm}
+                    onClick={handleBackToPrevious}
                     className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
                   >
-                    Back to Scraper
+                    {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
                   </button>
                 </div>
               </div>
+            )}
+
+            {currentView === 'profile-details' && (
+              <ProfileDetailsDisplay
+                profiles={profileDetails}
+                onBack={handleBackToPrevious}
+              />
             )}
           </div>
         )}
