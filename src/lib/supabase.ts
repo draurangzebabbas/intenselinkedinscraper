@@ -9,7 +9,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Set' : 'Missing')
 }
 
-// Create Supabase client with additional options to handle CORS
+// Create Supabase client with enhanced configuration for better connectivity
 export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
   auth: {
     autoRefreshToken: true,
@@ -24,11 +24,79 @@ export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
   global: {
     headers: {
       'Content-Type': 'application/json',
+    },
+    fetch: (url, options = {}) => {
+      // Enhanced fetch with retry logic and better error handling
+      return fetchWithRetry(url, {
+        ...options,
+        timeout: 30000, // 30 second timeout
+      });
     }
   }
 })
 
-// Test Supabase connection with improved error handling
+// Enhanced fetch function with retry logic and timeout
+async function fetchWithRetry(url: string | URL | Request, options: RequestInit & { timeout?: number } = {}, retries = 3): Promise<Response> {
+  const { timeout = 30000, ...fetchOptions } = options;
+  
+  for (let i = 0; i < retries; i++) {
+    try {
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      const response = await fetch(url, {
+        ...fetchOptions,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // If response is ok, return it
+      if (response.ok) {
+        return response;
+      }
+      
+      // If it's a client error (4xx), don't retry
+      if (response.status >= 400 && response.status < 500) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      // For server errors (5xx), retry
+      if (i === retries - 1) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      if (error instanceof Error) {
+        // Don't retry on abort (timeout) or certain network errors on final attempt
+        if (error.name === 'AbortError') {
+          if (i === retries - 1) {
+            throw new Error(`Request timeout after ${timeout}ms. Please check your internet connection and try again.`);
+          }
+        } else if (error.message.includes('Failed to fetch')) {
+          if (i === retries - 1) {
+            throw new Error(`Network connection failed. Please check your internet connection and ensure ${supabaseUrl} is accessible.`);
+          }
+        } else {
+          // For other errors, throw immediately
+          throw error;
+        }
+      }
+      
+      // Wait before retrying (exponential backoff)
+      if (i < retries - 1) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+      }
+    }
+  }
+  
+  throw new Error('Max retries exceeded');
+}
+
+// Test Supabase connection with improved error handling and retry logic
 export const testSupabaseConnection = async () => {
   try {
     console.log('Testing Supabase connection...')
@@ -63,22 +131,19 @@ export const testSupabaseConnection = async () => {
     
     console.log('Attempting to connect to Supabase...')
     
-    // Try multiple connection approaches
+    // Try multiple connection approaches with better error handling
     try {
-      // First, try a simple health check using the REST API
-      const healthResponse = await fetch(`${supabaseUrl}/rest/v1/`, {
+      // First, try a simple health check using the REST API with retry logic
+      const healthResponse = await fetchWithRetry(`${supabaseUrl}/rest/v1/`, {
         method: 'GET',
         headers: {
           'apikey': supabaseAnonKey,
           'Authorization': `Bearer ${supabaseAnonKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'return=minimal'
-        }
+        },
+        timeout: 15000 // 15 second timeout for health check
       });
-      
-      if (!healthResponse.ok) {
-        throw new Error(`Health check failed: ${healthResponse.status} ${healthResponse.statusText}`);
-      }
       
       console.log('Health check passed, testing database access...')
       
@@ -124,38 +189,25 @@ export const testSupabaseConnection = async () => {
       console.error('Connection error:', fetchError)
       
       if (fetchError instanceof Error) {
-        if (fetchError.message.includes('Failed to fetch') || fetchError.name === 'TypeError') {
-          // This is likely a CORS or network issue
-          console.log('Detected network/CORS issue, trying alternative approach...')
-          
-          // Try a different approach - test auth endpoint
-          try {
-            const authResponse = await fetch(`${supabaseUrl}/auth/v1/settings`, {
-              method: 'GET',
-              headers: {
-                'apikey': supabaseAnonKey,
-                'Content-Type': 'application/json'
-              }
-            });
-            
-            if (authResponse.ok) {
-              console.log('Auth endpoint accessible, connection should work')
-              return { 
-                success: true, 
-                message: 'Connection successful via auth endpoint',
-                warning: 'Database tables may need to be created'
-              }
-            }
-          } catch (authError) {
-            console.error('Auth endpoint also failed:', authError)
-          }
-          
-          throw new Error(`Network connection failed. This could be due to:
+        // Provide more specific error messages based on the error type
+        if (fetchError.message.includes('timeout')) {
+          throw new Error(`Connection timeout. Your Supabase project might be slow to respond or there may be network issues. Please try again or check your internet connection.`)
+        } else if (fetchError.message.includes('Network connection failed')) {
+          throw new Error(`Cannot reach Supabase servers. Please check:
 
-• CORS configuration issues (Supabase should handle this automatically)
-• Network connectivity problems
-• Firewall blocking the connection
-• Supabase project configuration issues
+• Your internet connection
+• Whether ${supabaseUrl} is accessible in your browser
+• If you're behind a firewall or proxy that might block the connection
+• If your Supabase project is active and not paused
+
+You can test by visiting: ${supabaseUrl}`)
+        } else if (fetchError.message.includes('Failed to fetch')) {
+          throw new Error(`Network request failed. This could be due to:
+
+• Internet connectivity issues
+• CORS configuration problems
+• Firewall or proxy blocking the connection
+• Supabase service temporarily unavailable
 
 Your Supabase URL: ${supabaseUrl}
 
@@ -163,7 +215,7 @@ Please try:
 1. Refresh the page and try again
 2. Check if your Supabase project is active in the dashboard
 3. Verify your internet connection
-4. Try accessing your Supabase project directly in the browser: ${supabaseUrl}`)
+4. Try accessing your Supabase project directly: ${supabaseUrl}`)
         }
         
         throw fetchError;
@@ -185,7 +237,13 @@ Please try:
 // Simplified connection test that bypasses some checks
 export const simpleConnectionTest = async () => {
   try {
+    // Use a simple auth session check with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
     const { data, error } = await supabase.auth.getSession()
+    
+    clearTimeout(timeoutId);
     
     if (error && !error.message.includes('session')) {
       throw error
@@ -193,9 +251,49 @@ export const simpleConnectionTest = async () => {
     
     return { success: true, message: 'Basic connection successful' }
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return { 
+        success: false, 
+        error: 'Connection timeout. Please check your internet connection and try again.' 
+      }
+    }
+    
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Connection failed' 
     }
+  }
+}
+
+// Helper function to safely execute Supabase operations with retry logic
+export const safeSupabaseOperation = async <T>(
+  operation: () => Promise<{ data: T | null; error: any }>,
+  operationName: string = 'database operation'
+): Promise<{ data: T | null; error: any }> => {
+  try {
+    const result = await operation();
+    return result;
+  } catch (error) {
+    console.error(`${operationName} failed:`, error);
+    
+    if (error instanceof Error) {
+      if (error.message.includes('Failed to fetch') || error.message.includes('timeout')) {
+        return {
+          data: null,
+          error: {
+            message: `Network error during ${operationName}. Please check your internet connection and try again.`,
+            code: 'NETWORK_ERROR'
+          }
+        };
+      }
+    }
+    
+    return {
+      data: null,
+      error: {
+        message: error instanceof Error ? error.message : `Unknown error during ${operationName}`,
+        code: 'UNKNOWN_ERROR'
+      }
+    };
   }
 }

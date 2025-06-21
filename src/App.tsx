@@ -9,11 +9,11 @@ import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { Auth } from './components/Auth';
 import { UserMenu } from './components/UserMenu';
 import { UserProfile } from './components/UserProfile';
-import { supabase, testSupabaseConnection, simpleConnectionTest } from './lib/supabase';
+import { supabase, testSupabaseConnection, simpleConnectionTest, safeSupabaseOperation } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
 import { processProfileImages } from './utils/imageUtils';
-import { Linkedin, Database, Activity, AlertCircle, RefreshCw } from 'lucide-react';
+import { Linkedin, Database, Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -67,6 +67,7 @@ function App() {
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -78,14 +79,38 @@ function App() {
   useEffect(() => {
     // Initialize authentication
     initializeAuth();
+    
+    // Listen for online/offline events
+    const handleOnline = () => {
+      setIsOnline(true);
+      console.log('Connection restored');
+      // Retry connection when coming back online
+      if (connectionError) {
+        handleRetryConnection();
+      }
+    };
+    
+    const handleOffline = () => {
+      setIsOnline(false);
+      console.log('Connection lost');
+      setConnectionError('No internet connection. Please check your network and try again.');
+    };
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   useEffect(() => {
-    // Load data when user is authenticated
-    if (user) {
+    // Load data when user is authenticated and online
+    if (user && isOnline) {
       initializeApp();
     }
-  }, [user]);
+  }, [user, isOnline]);
 
   const initializeAuth = async () => {
     try {
@@ -129,6 +154,12 @@ function App() {
   };
 
   const initializeApp = async () => {
+    // Check if we're online first
+    if (!isOnline) {
+      setConnectionError('No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     // Test Supabase connection first
     const connectionTest = await testSupabaseConnection();
     
@@ -145,48 +176,60 @@ function App() {
     try {
       setConnectionError(''); // Clear any previous connection errors
       
-      // Load profiles with better error handling
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('linkedin_profiles')
-        .select('*')
-        .order('last_updated', { ascending: false })
-        .limit(100);
+      // Load profiles with enhanced error handling
+      const profilesResult = await safeSupabaseOperation(
+        () => supabase
+          .from('linkedin_profiles')
+          .select('*')
+          .order('last_updated', { ascending: false })
+          .limit(100),
+        'loading profiles'
+      );
 
-      if (profilesError) {
-        console.error('Profiles error:', profilesError);
+      if (profilesResult.error) {
+        console.error('Profiles error:', profilesResult.error);
         
         // Handle specific errors
-        if (profilesError.code === 'PGRST116') {
+        if (profilesResult.error.code === 'PGRST116' || 
+            (profilesResult.error.message && profilesResult.error.message.includes('does not exist'))) {
           // Table doesn't exist - this is OK for initial setup
           console.log('Tables not found - this is normal for initial setup');
           setProfiles([]);
+        } else if (profilesResult.error.code === 'NETWORK_ERROR') {
+          throw new Error(profilesResult.error.message);
         } else {
-          throw new Error(`Failed to load profiles: ${profilesError.message}`);
+          throw new Error(`Failed to load profiles: ${profilesResult.error.message}`);
         }
       } else {
-        setProfiles(profilesData || []);
+        setProfiles(profilesResult.data || []);
       }
 
-      // Load jobs with better error handling
-      const { data: jobsData, error: jobsError } = await supabase
-        .from('scraping_jobs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
+      // Load jobs with enhanced error handling
+      const jobsResult = await safeSupabaseOperation(
+        () => supabase
+          .from('scraping_jobs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50),
+        'loading jobs'
+      );
 
-      if (jobsError) {
-        console.error('Jobs error:', jobsError);
+      if (jobsResult.error) {
+        console.error('Jobs error:', jobsResult.error);
         
         // Handle specific errors
-        if (jobsError.code === 'PGRST116') {
+        if (jobsResult.error.code === 'PGRST116' || 
+            (jobsResult.error.message && jobsResult.error.message.includes('does not exist'))) {
           // Table doesn't exist - this is OK for initial setup
           console.log('Jobs table not found - this is normal for initial setup');
           setJobs([]);
+        } else if (jobsResult.error.code === 'NETWORK_ERROR') {
+          throw new Error(jobsResult.error.message);
         } else {
-          throw new Error(`Failed to load jobs: ${jobsError.message}`);
+          throw new Error(`Failed to load jobs: ${jobsResult.error.message}`);
         }
       } else {
-        setJobs(jobsData || []);
+        setJobs(jobsResult.data || []);
       }
     } catch (error) {
       console.error('Error loading data:', error);
@@ -210,6 +253,11 @@ function App() {
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
     // Check connection before starting scraping
+    if (!isOnline) {
+      alert('Cannot start scraping: No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     if (connectionError) {
       alert('Cannot start scraping: Database connection error. Please check your Supabase configuration.');
       return;
@@ -221,18 +269,25 @@ function App() {
     updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     try {
-      // Create job record
-      const { data: job, error: jobError } = await supabase
-        .from('scraping_jobs')
-        .insert({
-          job_type: type,
-          input_url: url,
-          status: 'running'
-        })
-        .select()
-        .single();
+      // Create job record with enhanced error handling
+      const jobResult = await safeSupabaseOperation(
+        () => supabase
+          .from('scraping_jobs')
+          .insert({
+            job_type: type,
+            input_url: url,
+            status: 'running'
+          })
+          .select()
+          .single(),
+        'creating job record'
+      );
 
-      if (jobError) throw jobError;
+      if (jobResult.error) {
+        throw new Error(`Failed to create job record: ${jobResult.error.message}`);
+      }
+
+      const job = jobResult.data;
 
       // Refresh jobs list
       await loadData();
@@ -252,14 +307,17 @@ function App() {
         updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
 
         // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: commentsData.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
+        await safeSupabaseOperation(
+          () => supabase
+            .from('scraping_jobs')
+            .update({
+              status: 'completed',
+              results_count: commentsData.length,
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', job.id),
+          'updating job status'
+        );
 
       } else if (type === 'profile_details') {
         updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
@@ -275,14 +333,17 @@ function App() {
         updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
         
         // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: profilesData.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
+        await safeSupabaseOperation(
+          () => supabase
+            .from('scraping_jobs')
+            .update({
+              status: 'completed',
+              results_count: profilesData.length,
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', job.id),
+          'updating job status'
+        );
 
       } else if (type === 'mixed') {
         updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
@@ -313,41 +374,62 @@ function App() {
         updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
 
         // Update job status
-        await supabase
-          .from('scraping_jobs')
-          .update({
-            status: 'completed',
-            results_count: profileUrls.length,
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', job.id);
+        await safeSupabaseOperation(
+          () => supabase
+            .from('scraping_jobs')
+            .update({
+              status: 'completed',
+              results_count: profileUrls.length,
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', job.id),
+          'updating job status'
+        );
       }
 
       await loadData();
     } catch (error) {
       console.error('Scraping error:', error);
       
-      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
+      let errorMessage = 'Unknown error occurred';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        
+        // Provide more helpful error messages for common issues
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
+          errorMessage = 'Network connection failed. Please check your internet connection and try again.';
+        } else if (errorMessage.includes('timeout')) {
+          errorMessage = 'Request timed out. The service may be slow to respond. Please try again.';
+        }
+      }
+      
+      setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Scraping failed');
       
       // Update job status to failed
-      const { data: jobs } = await supabase
-        .from('scraping_jobs')
-        .select('id')
-        .eq('input_url', url)
-        .eq('status', 'running')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (jobs && jobs.length > 0) {
-        await supabase
+      const jobsResult = await safeSupabaseOperation(
+        () => supabase
           .from('scraping_jobs')
-          .update({
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Unknown error',
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', jobs[0].id);
+          .select('id')
+          .eq('input_url', url)
+          .eq('status', 'running')
+          .order('created_at', { ascending: false })
+          .limit(1),
+        'finding job to update'
+      );
+
+      if (jobsResult.data && jobsResult.data.length > 0) {
+        await safeSupabaseOperation(
+          () => supabase
+            .from('scraping_jobs')
+            .update({
+              status: 'failed',
+              error_message: errorMessage,
+              completed_at: new Date().toISOString()
+            })
+            .eq('id', jobsResult.data[0].id),
+          'updating failed job status'
+        );
       }
       
       await loadData();
@@ -358,14 +440,17 @@ function App() {
 
   const getProfilesWithDetails = async (profileUrls: string[]): Promise<any[]> => {
     // Check which profiles already exist in database
-    const { data: existingProfiles } = await supabase
-      .from('linkedin_profiles')
-      .select('*')
-      .in('linkedin_url', profileUrls);
+    const existingProfilesResult = await safeSupabaseOperation(
+      () => supabase
+        .from('linkedin_profiles')
+        .select('*')
+        .in('linkedin_url', profileUrls),
+      'checking existing profiles'
+    );
 
     const existingUrlsMap = new Map();
-    if (existingProfiles) {
-      existingProfiles.forEach(profile => {
+    if (existingProfilesResult.data) {
+      existingProfilesResult.data.forEach(profile => {
         existingUrlsMap.set(profile.linkedin_url, profile.profile_data);
       });
     }
@@ -395,15 +480,18 @@ function App() {
           const processedProfile = await processProfileImages(profileData);
           
           // Store in database using UPSERT to prevent duplicates
-          await supabase
-            .from('linkedin_profiles')
-            .upsert({
-              linkedin_url: linkedinUrl,
-              profile_data: processedProfile,
-              last_updated: new Date().toISOString()
-            }, {
-              onConflict: 'linkedin_url'
-            });
+          await safeSupabaseOperation(
+            () => supabase
+              .from('linkedin_profiles')
+              .upsert({
+                linkedin_url: linkedinUrl,
+                profile_data: processedProfile,
+                last_updated: new Date().toISOString()
+              }, {
+                onConflict: 'linkedin_url'
+              }),
+            'saving profile data'
+          );
           
           // Add to results
           allProfileDetails.push(processedProfile);
@@ -415,6 +503,11 @@ function App() {
   };
 
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
+    if (!isOnline) {
+      alert('Cannot start scraping: No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     setIsLoading(true);
     setScrapingType('profile_details');
     setLoadingError('');
@@ -432,7 +525,14 @@ function App() {
       await loadData();
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
-      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
+      let errorMessage = 'Unknown error occurred';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
+          errorMessage = 'Network connection failed. Please check your internet connection and try again.';
+        }
+      }
+      setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
     } finally {
       setIsLoading(false);
@@ -453,15 +553,18 @@ function App() {
         const processedProfile = await processProfileImages(profileData);
         
         // Update in database using UPSERT to prevent duplicates
-        await supabase
-          .from('linkedin_profiles')
-          .upsert({
-            linkedin_url: linkedinUrl,
-            profile_data: processedProfile,
-            last_updated: new Date().toISOString()
-          }, {
-            onConflict: 'linkedin_url'
-          });
+        await safeSupabaseOperation(
+          () => supabase
+            .from('linkedin_profiles')
+            .upsert({
+              linkedin_url: linkedinUrl,
+              profile_data: processedProfile,
+              last_updated: new Date().toISOString()
+            }, {
+              onConflict: 'linkedin_url'
+            }),
+          'updating profile'
+        );
       }
       
       await loadData();
@@ -472,6 +575,11 @@ function App() {
   };
 
   const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
+    if (!isOnline) {
+      alert('Cannot update profiles: No internet connection. Please check your network and try again.');
+      return;
+    }
+    
     setIsUpdating(true);
     
     try {
@@ -492,15 +600,18 @@ function App() {
             const processedProfile = await processProfileImages(profileData);
             
             // Update in database using UPSERT to prevent duplicates
-            await supabase
-              .from('linkedin_profiles')
-              .upsert({
-                linkedin_url: linkedinUrl,
-                profile_data: processedProfile,
-                last_updated: new Date().toISOString()
-              }, {
-                onConflict: 'linkedin_url'
-              });
+            await safeSupabaseOperation(
+              () => supabase
+                .from('linkedin_profiles')
+                .upsert({
+                  linkedin_url: linkedinUrl,
+                  profile_data: processedProfile,
+                  last_updated: new Date().toISOString()
+                }, {
+                  onConflict: 'linkedin_url'
+                }),
+              'updating profile in batch'
+            );
           }
         }
       }
@@ -515,12 +626,17 @@ function App() {
 
   const handleDeleteSelectedProfiles = async (profileIds: string[]) => {
     try {
-      const { error } = await supabase
-        .from('linkedin_profiles')
-        .delete()
-        .in('id', profileIds);
+      const deleteResult = await safeSupabaseOperation(
+        () => supabase
+          .from('linkedin_profiles')
+          .delete()
+          .in('id', profileIds),
+        'deleting profiles'
+      );
 
-      if (error) throw error;
+      if (deleteResult.error) {
+        throw new Error(deleteResult.error.message);
+      }
       
       await loadData();
     } catch (error) {
@@ -602,7 +718,9 @@ function App() {
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
       // Ensure profiles data is fresh when switching to profiles tab
-      await loadData();
+      if (isOnline && !connectionError) {
+        await loadData();
+      }
     } else if (tab === 'scraper') {
       setCurrentView('form');
     } else if (tab === 'jobs') {
@@ -615,6 +733,11 @@ function App() {
     setConnectionError('');
     
     try {
+      // Check if we're online first
+      if (!isOnline) {
+        throw new Error('No internet connection. Please check your network and try again.');
+      }
+      
       // Try simple connection test first
       const simpleTest = await simpleConnectionTest();
       if (simpleTest.success) {
@@ -663,14 +786,23 @@ function App() {
         <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 bg-red-100 rounded-lg">
-              <AlertCircle className="w-6 h-6 text-red-600" />
+              {isOnline ? (
+                <AlertCircle className="w-6 h-6 text-red-600" />
+              ) : (
+                <WifiOff className="w-6 h-6 text-red-600" />
+              )}
             </div>
-            <h2 className="text-xl font-semibold text-gray-900">Connection Issue</h2>
+            <h2 className="text-xl font-semibold text-gray-900">
+              {isOnline ? 'Connection Issue' : 'No Internet Connection'}
+            </h2>
           </div>
           
           <div className="space-y-4">
             <p className="text-gray-600">
-              There was an issue connecting to the database:
+              {isOnline 
+                ? 'There was an issue connecting to the database:'
+                : 'You appear to be offline. Please check your internet connection.'
+              }
             </p>
             
             <div className="bg-gray-50 p-4 rounded-lg">
@@ -680,20 +812,23 @@ function App() {
               </pre>
             </div>
             
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-gray-700">This could be due to:</p>
-              <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
-                <li>Network connectivity issues</li>
-                <li>Supabase project configuration</li>
-                <li>Database tables not yet created (normal for first setup)</li>
-                <li>Temporary service interruption</li>
-              </ul>
-            </div>
+            {isOnline && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-gray-700">This could be due to:</p>
+                <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                  <li>Network connectivity issues</li>
+                  <li>Supabase project configuration</li>
+                  <li>Database tables not yet created (normal for first setup)</li>
+                  <li>Temporary service interruption</li>
+                  <li>Firewall or proxy blocking the connection</li>
+                </ul>
+              </div>
+            )}
             
             <div className="flex gap-3">
               <button
                 onClick={handleRetryConnection}
-                disabled={isRetrying}
+                disabled={isRetrying || !isOnline}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {isRetrying ? (
@@ -704,16 +839,33 @@ function App() {
                 ) : (
                   <>
                     <RefreshCw className="w-4 h-4" />
-                    Retry Connection
+                    {isOnline ? 'Retry Connection' : 'Check Connection'}
                   </>
                 )}
               </button>
-              <button
-                onClick={() => window.open('https://supabase.com/dashboard', '_blank')}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-              >
-                Open Supabase Dashboard
-              </button>
+              {isOnline && (
+                <button
+                  onClick={() => window.open('https://supabase.com/dashboard', '_blank')}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  Open Supabase Dashboard
+                </button>
+              )}
+            </div>
+            
+            {/* Connection status indicator */}
+            <div className="flex items-center justify-center gap-2 text-sm">
+              {isOnline ? (
+                <>
+                  <Wifi className="w-4 h-4 text-green-600" />
+                  <span className="text-green-600">Internet Connected</span>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="w-4 h-4 text-red-600" />
+                  <span className="text-red-600">No Internet Connection</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -732,6 +884,15 @@ function App() {
                 <Linkedin className="w-6 h-6 text-blue-600" />
               </div>
               <h1 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h1>
+              
+              {/* Connection status indicator in header */}
+              <div className="flex items-center gap-1">
+                {isOnline ? (
+                  <Wifi className="w-4 h-4 text-green-600" />
+                ) : (
+                  <WifiOff className="w-4 h-4 text-red-600" />
+                )}
+              </div>
             </div>
             
             <div className="flex items-center gap-6">
