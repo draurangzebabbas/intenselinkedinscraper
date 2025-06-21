@@ -500,6 +500,9 @@ function App() {
       setCurrentView('comments');
     } else if (previousView === 'profiles-list') {
       setCurrentView('profiles-list');
+      setActiveTab('profiles');
+    } else if (previousView === 'profile-table') {
+      setCurrentView('profile-table');
     } else {
       setCurrentView('form');
     }
