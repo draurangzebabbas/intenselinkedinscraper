@@ -54,8 +54,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
-  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
+  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
   
   // Loading progress states
@@ -498,9 +498,8 @@ function App() {
   const handleBackToPrevious = () => {
     if (previousView === 'comments') {
       setCurrentView('comments');
-    } else if (previousView === 'profiles') {
-      setActiveTab('profiles');
-      setCurrentView('form');
+    } else if (previousView === 'profiles-list') {
+      setCurrentView('profiles-list');
     } else {
       setCurrentView('form');
     }
@@ -509,7 +508,7 @@ function App() {
   const handleViewProfileDetails = (profile: any) => {
     // Set the previous view based on current context
     if (activeTab === 'profiles') {
-      setPreviousView('profiles');
+      setPreviousView('profiles-list');
     } else {
       setPreviousView(currentView);
     }
@@ -521,9 +520,16 @@ function App() {
   // Handle tab changes and ensure data is loaded
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
+    
+    // Set appropriate view based on tab
     if (tab === 'profiles') {
+      setCurrentView('profiles-list');
       // Ensure profiles data is fresh when switching to profiles tab
       await loadData();
+    } else if (tab === 'scraper') {
+      setCurrentView('form');
+    } else if (tab === 'jobs') {
+      setCurrentView('form'); // Jobs tab doesn't need special view handling
     }
   };
 
@@ -759,8 +765,8 @@ function App() {
               <ProfileDetailsDisplay
                 profiles={profileDetails}
                 onBack={() => {
-                  setCurrentView('form');
-                  setPreviousView('profiles');
+                  setCurrentView('profiles-list');
+                  setPreviousView('profiles-list');
                 }}
               />
             ) : (
