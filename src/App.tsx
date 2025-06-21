@@ -4,6 +4,8 @@ import { DataTable } from './components/DataTable';
 import { JobsTable } from './components/JobsTable';
 import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
+import { LoadingProgress } from './components/LoadingProgress';
+import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { supabase } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
@@ -51,7 +53,14 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
+  
+  // Loading progress states
+  const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('');
+  const [loadingError, setLoadingError] = useState('');
+  const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
   useEffect(() => {
     loadData();
@@ -83,8 +92,17 @@ function App() {
     }
   };
 
+  const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
+    setLoadingStage(stage);
+    setLoadingProgress(progress);
+    setLoadingMessage(message);
+  };
+
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
     setIsLoading(true);
+    setScrapingType(type);
+    setLoadingError('');
+    updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     try {
       // Create job record
@@ -104,12 +122,18 @@ function App() {
       await loadData();
 
       if (type === 'post_comments') {
+        updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
+        
         // Scrape post comments and show them to user
         const datasetId = await apifyService.scrapePostComments(url);
+        
+        updateLoadingProgress('saving_data', 75, 'Processing comment data...');
         const commentsData = await apifyService.getDatasetItems(datasetId);
         
         setCommentersData(commentsData);
         setCurrentView('comments');
+        
+        updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
 
         // Update job status
         await supabase
@@ -122,10 +146,16 @@ function App() {
           .eq('id', job.id);
 
       } else if (type === 'profile_details') {
+        updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
+        
         // Scrape single profile and show details
         const profilesData = await getProfilesWithDetails([url]);
+        
+        updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
-        setCurrentView('profile-details');
+        setCurrentView('profile-table');
+        
+        updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
         
         // Update job status
         await supabase
@@ -138,9 +168,13 @@ function App() {
           .eq('id', job.id);
 
       } else if (type === 'mixed') {
+        updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
+        
         // Scrape post comments first
         const datasetId = await apifyService.scrapePostComments(url);
         const commentsData = await apifyService.getDatasetItems(datasetId);
+        
+        updateLoadingProgress('extracting_profiles', 40, 'Extracting profile URLs from comments...');
         
         // Extract profile URLs from comments
         const profileUrls = commentsData
@@ -149,10 +183,16 @@ function App() {
           .slice(0, 50); // Limit to first 50 profiles
         
         if (profileUrls.length > 0) {
+          updateLoadingProgress('scraping_profiles', 60, `Scraping ${profileUrls.length} profile details...`);
+          
           const profilesData = await getProfilesWithDetails(profileUrls);
+          
+          updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
-          setCurrentView('profile-details');
+          setCurrentView('profile-table');
         }
+
+        updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
 
         // Update job status
         await supabase
@@ -168,6 +208,9 @@ function App() {
       await loadData();
     } catch (error) {
       console.error('Scraping error:', error);
+      
+      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
+      updateLoadingProgress('error', 0, 'Scraping failed');
       
       // Update job status to failed
       const { data: jobs } = await supabase
@@ -248,13 +291,19 @@ function App() {
 
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
     setIsLoading(true);
+    setScrapingType('profile_details');
+    updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
     
     try {
       const profilesData = await getProfilesWithDetails(profileUrls);
+      updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
-      setCurrentView('profile-details');
+      setCurrentView('profile-table');
+      updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
+      setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
+      updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
     } finally {
       setIsLoading(false);
     }
@@ -294,10 +343,23 @@ function App() {
     exportData(profiles, format, 'linkedin_profiles');
   };
 
+  const handleExportProfileResults = (format: string) => {
+    exportData(profileDetails.map(profile => ({ profile_data: profile })), format, 'profile_results');
+  };
+
   const handleBackToForm = () => {
     setCurrentView('form');
     setCommentersData([]);
     setProfileDetails([]);
+    setLoadingStage('starting');
+    setLoadingProgress(0);
+    setLoadingMessage('');
+    setLoadingError('');
+  };
+
+  const handleViewProfileDetails = (profile: any) => {
+    setProfileDetails([profile]);
+    setCurrentView('profile-details');
   };
 
   return (
@@ -360,6 +422,17 @@ function App() {
               <>
                 <ScrapingForm onScrape={handleScrape} isLoading={isLoading} />
                 
+                {/* Loading Progress */}
+                {isLoading && (
+                  <LoadingProgress
+                    type={scrapingType}
+                    stage={loadingStage}
+                    progress={loadingProgress}
+                    message={loadingMessage}
+                    error={loadingError}
+                  />
+                )}
+                
                 {/* Recent Activity */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="bg-white rounded-lg shadow p-6">
@@ -419,6 +492,36 @@ function App() {
                 profiles={profileDetails}
                 onBack={handleBackToForm}
               />
+            )}
+
+            {currentView === 'profile-table' && (
+              <div className="space-y-6">
+                {isLoading && (
+                  <LoadingProgress
+                    type={scrapingType}
+                    stage={loadingStage}
+                    progress={loadingProgress}
+                    message={loadingMessage}
+                    error={loadingError}
+                  />
+                )}
+                
+                <ProfileResultsTable
+                  profiles={profileDetails}
+                  onViewDetails={handleViewProfileDetails}
+                  onExport={handleExportProfileResults}
+                  showActions={false}
+                />
+                
+                <div className="flex justify-center">
+                  <button
+                    onClick={handleBackToForm}
+                    className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    Back to Scraper
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}
