@@ -278,13 +278,15 @@ function App() {
           updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Converting images for profile ${i + 1}/${newProfilesData.length}...`);
           const processedProfile = await processProfileImages(profileData);
           
-          // Store in database
+          // Store in database using UPSERT to prevent duplicates
           await supabase
             .from('linkedin_profiles')
-            .insert({
+            .upsert({
               linkedin_url: linkedinUrl,
               profile_data: processedProfile,
               last_updated: new Date().toISOString()
+            }, {
+              onConflict: 'linkedin_url'
             });
           
           // Add to results
@@ -322,8 +324,6 @@ function App() {
   };
 
   const handleUpdateProfile = async (profileUrl: string) => {
-    setIsUpdating(true);
-    
     try {
       // Force update by scraping new data
       const datasetId = await apifyService.scrapeProfiles([profileUrl]);
@@ -336,21 +336,22 @@ function App() {
         // Process images to base64
         const processedProfile = await processProfileImages(profileData);
         
-        // Update in database
+        // Update in database using UPSERT to prevent duplicates
         await supabase
           .from('linkedin_profiles')
-          .update({
+          .upsert({
+            linkedin_url: linkedinUrl,
             profile_data: processedProfile,
             last_updated: new Date().toISOString()
-          })
-          .eq('linkedin_url', linkedinUrl);
+          }, {
+            onConflict: 'linkedin_url'
+          });
       }
       
       await loadData();
     } catch (error) {
       console.error('Error updating profile:', error);
-    } finally {
-      setIsUpdating(false);
+      throw error; // Re-throw to handle in component
     }
   };
 
@@ -374,14 +375,16 @@ function App() {
             // Process images to base64
             const processedProfile = await processProfileImages(profileData);
             
-            // Update in database
+            // Update in database using UPSERT to prevent duplicates
             await supabase
               .from('linkedin_profiles')
-              .update({
+              .upsert({
+                linkedin_url: linkedinUrl,
                 profile_data: processedProfile,
                 last_updated: new Date().toISOString()
-              })
-              .eq('linkedin_url', linkedinUrl);
+              }, {
+                onConflict: 'linkedin_url'
+              });
           }
         }
       }

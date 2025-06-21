@@ -37,6 +37,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   const [filter, setFilter] = useState('');
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
+  const [updatingProfiles, setUpdatingProfiles] = useState<Set<string>>(new Set());
 
   const allColumns = [
     { key: 'select', label: 'Select' },
@@ -96,6 +97,22 @@ export const DataTable: React.FC<DataTableProps> = ({
     }
   };
 
+  const handleSingleProfileUpdate = async (profileUrl: string, profileId: string) => {
+    setUpdatingProfiles(prev => new Set(prev).add(profileId));
+    
+    try {
+      await onUpdateProfile(profileUrl);
+    } catch (error) {
+      console.error('Error updating profile:', error);
+    } finally {
+      setUpdatingProfiles(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(profileId);
+        return newSet;
+      });
+    }
+  };
+
   const handleBulkUpdate = async () => {
     if (onUpdateSelectedProfiles && selectedProfiles.size > 0) {
       const selectedUrls = filteredProfiles
@@ -127,7 +144,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   };
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return { text: 'Never', color: 'text-gray-600 bg-gray-100', exact: 'Never' };
+    if (!dateString) return { text: 'Never', color: 'text-gray-600 bg-gray-100 border-gray-200', exact: 'Never' };
     
     const date = new Date(dateString);
     const now = new Date();
@@ -158,6 +175,7 @@ export const DataTable: React.FC<DataTableProps> = ({
 
   const renderCell = (profile: Profile, columnKey: string) => {
     const data = profile.profile_data || {};
+    const isProfileUpdating = updatingProfiles.has(profile.id);
     
     switch (columnKey) {
       case 'select':
@@ -257,8 +275,8 @@ export const DataTable: React.FC<DataTableProps> = ({
         const dateInfo = formatDate(profile.last_updated);
         return (
           <div className="group relative">
-            <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${dateInfo.color}`}>
-              {dateInfo.text}
+            <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full border ${dateInfo.color} ${isProfileUpdating ? 'animate-pulse' : ''}`}>
+              {isProfileUpdating ? 'Updating...' : dateInfo.text}
             </span>
             <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg">
               <div className="font-medium">Last Updated</div>
@@ -282,12 +300,12 @@ export const DataTable: React.FC<DataTableProps> = ({
             )}
             
             <button
-              onClick={() => onUpdateProfile(profile.linkedin_url)}
-              disabled={isUpdating}
+              onClick={() => handleSingleProfileUpdate(profile.linkedin_url, profile.id)}
+              disabled={isProfileUpdating}
               className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              <RefreshCw className={`w-4 h-4 ${isUpdating ? 'animate-spin' : ''}`} />
-              Update
+              <RefreshCw className={`w-4 h-4 ${isProfileUpdating ? 'animate-spin' : ''}`} />
+              {isProfileUpdating ? 'Updating...' : 'Update'}
             </button>
           </div>
         );
@@ -464,7 +482,7 @@ export const DataTable: React.FC<DataTableProps> = ({
             {filteredProfiles.map((profile) => (
               <tr 
                 key={profile.id} 
-                className={`hover:bg-gray-50 ${selectedProfiles.has(profile.id) ? 'bg-blue-50' : ''}`}
+                className={`hover:bg-gray-50 ${selectedProfiles.has(profile.id) ? 'bg-blue-50' : ''} ${updatingProfiles.has(profile.id) ? 'bg-yellow-50' : ''}`}
               >
                 {allColumns
                   .filter(column => visibleColumns.has(column.key))
