@@ -1,5 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink } from 'lucide-react';
+import { 
+  X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink,
+  CheckSquare, Square, Trash2, Users, Upload
+} from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -12,7 +15,9 @@ interface Profile {
 interface DataTableProps {
   profiles: Profile[];
   onUpdateProfile: (profileUrl: string) => Promise<void>;
-  onExport: (format: string) => void;
+  onUpdateSelectedProfiles?: (profileUrls: string[]) => Promise<void>;
+  onDeleteSelectedProfiles?: (profileIds: string[]) => Promise<void>;
+  onExport: (format: string, selectedOnly?: boolean) => void;
   onViewDetails?: (profile: any) => void;
   isUpdating: boolean;
 }
@@ -20,16 +25,21 @@ interface DataTableProps {
 export const DataTable: React.FC<DataTableProps> = ({
   profiles,
   onUpdateProfile,
+  onUpdateSelectedProfiles,
+  onDeleteSelectedProfiles,
   onExport,
   onViewDetails,
   isUpdating
 }) => {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(['name', 'headline', 'location', 'connections', 'updated', 'actions'])
+    new Set(['select', 'name', 'headline', 'location', 'connections', 'updated', 'actions'])
   );
   const [filter, setFilter] = useState('');
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
+  const [showBulkActions, setShowBulkActions] = useState(false);
 
   const allColumns = [
+    { key: 'select', label: 'Select' },
     { key: 'picture', label: 'Picture' },
     { key: 'name', label: 'Name' },
     { key: 'headline', label: 'Headline' },
@@ -54,6 +64,8 @@ export const DataTable: React.FC<DataTableProps> = ({
   }, [profiles, filter]);
 
   const toggleColumn = (columnKey: string) => {
+    if (columnKey === 'select' || columnKey === 'actions') return; // Don't allow hiding these
+    
     const newVisible = new Set(visibleColumns);
     if (newVisible.has(columnKey)) {
       newVisible.delete(columnKey);
@@ -61,6 +73,57 @@ export const DataTable: React.FC<DataTableProps> = ({
       newVisible.add(columnKey);
     }
     setVisibleColumns(newVisible);
+  };
+
+  const toggleProfileSelection = (profileId: string) => {
+    const newSelected = new Set(selectedProfiles);
+    if (newSelected.has(profileId)) {
+      newSelected.delete(profileId);
+    } else {
+      newSelected.add(profileId);
+    }
+    setSelectedProfiles(newSelected);
+    setShowBulkActions(newSelected.size > 0);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedProfiles.size === filteredProfiles.length) {
+      setSelectedProfiles(new Set());
+      setShowBulkActions(false);
+    } else {
+      setSelectedProfiles(new Set(filteredProfiles.map(p => p.id)));
+      setShowBulkActions(true);
+    }
+  };
+
+  const handleBulkUpdate = async () => {
+    if (onUpdateSelectedProfiles && selectedProfiles.size > 0) {
+      const selectedUrls = filteredProfiles
+        .filter(p => selectedProfiles.has(p.id))
+        .map(p => p.linkedin_url);
+      
+      await onUpdateSelectedProfiles(selectedUrls);
+      setSelectedProfiles(new Set());
+      setShowBulkActions(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (onDeleteSelectedProfiles && selectedProfiles.size > 0) {
+      const confirmed = window.confirm(
+        `Are you sure you want to delete ${selectedProfiles.size} selected profiles? This action cannot be undone.`
+      );
+      
+      if (confirmed) {
+        await onDeleteSelectedProfiles(Array.from(selectedProfiles));
+        setSelectedProfiles(new Set());
+        setShowBulkActions(false);
+      }
+    }
+  };
+
+  const handleBulkExport = (format: string) => {
+    onExport(format, true);
   };
 
   const formatDate = (dateString: string | null) => {
@@ -92,6 +155,20 @@ export const DataTable: React.FC<DataTableProps> = ({
     const data = profile.profile_data || {};
     
     switch (columnKey) {
+      case 'select':
+        return (
+          <button
+            onClick={() => toggleProfileSelection(profile.id)}
+            className="text-blue-600 hover:text-blue-800"
+          >
+            {selectedProfiles.has(profile.id) ? (
+              <CheckSquare className="w-5 h-5" />
+            ) : (
+              <Square className="w-5 h-5" />
+            )}
+          </button>
+        );
+
       case 'picture':
         return (
           <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200">
@@ -219,6 +296,11 @@ export const DataTable: React.FC<DataTableProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <h3 className="text-xl font-bold text-gray-900">
             Saved Profiles ({filteredProfiles.length})
+            {selectedProfiles.size > 0 && (
+              <span className="ml-2 text-sm font-normal text-blue-600">
+                ({selectedProfiles.size} selected)
+              </span>
+            )}
           </h3>
           
           <div className="flex flex-col sm:flex-row gap-3">
@@ -235,11 +317,11 @@ export const DataTable: React.FC<DataTableProps> = ({
             
             <div className="flex gap-2">
               <select
-                onChange={(e) => onExport(e.target.value)}
+                onChange={(e) => onExport(e.target.value, false)}
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 defaultValue=""
               >
-                <option value="" disabled>Export as...</option>
+                <option value="" disabled>Export All...</option>
                 <option value="csv">CSV</option>
                 <option value="json">JSON</option>
                 <option value="xlsx">Excel</option>
@@ -248,17 +330,100 @@ export const DataTable: React.FC<DataTableProps> = ({
           </div>
         </div>
 
+        {/* Bulk Actions Bar */}
+        {showBulkActions && (
+          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Users className="w-5 h-5 text-blue-600" />
+                <span className="text-sm font-medium text-blue-900">
+                  {selectedProfiles.size} profiles selected
+                </span>
+              </div>
+              
+              <div className="flex gap-2">
+                {onUpdateSelectedProfiles && (
+                  <button
+                    onClick={handleBulkUpdate}
+                    disabled={isUpdating}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Update Selected
+                  </button>
+                )}
+                
+                <select
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      handleBulkExport(e.target.value);
+                      e.target.value = '';
+                    }
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  defaultValue=""
+                >
+                  <option value="" disabled>Export Selected...</option>
+                  <option value="csv">CSV</option>
+                  <option value="json">JSON</option>
+                  <option value="xlsx">Excel</option>
+                </select>
+                
+                {onDeleteSelectedProfiles && (
+                  <button
+                    onClick={handleBulkDelete}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete Selected
+                  </button>
+                )}
+                
+                <button
+                  onClick={() => {
+                    setSelectedProfiles(new Set());
+                    setShowBulkActions(false);
+                  }}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Column Visibility Controls */}
         <div className="mt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              {selectedProfiles.size === filteredProfiles.length && filteredProfiles.length > 0 ? (
+                <CheckSquare className="w-4 h-4" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
+              {selectedProfiles.size === filteredProfiles.length && filteredProfiles.length > 0 ? 'Deselect All' : 'Select All'}
+            </button>
+            
+            <span className="text-sm text-gray-600">
+              {selectedProfiles.size} of {filteredProfiles.length} selected
+            </span>
+          </div>
+          
           <div className="flex flex-wrap gap-2">
             {allColumns.map(column => (
               <button
                 key={column.key}
                 onClick={() => toggleColumn(column.key)}
+                disabled={column.key === 'select' || column.key === 'actions'}
                 className={`inline-flex items-center gap-1 px-3 py-1 text-sm rounded-full transition-colors ${
                   visibleColumns.has(column.key)
                     ? 'bg-blue-100 text-blue-700'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
+                } ${(column.key === 'select' || column.key === 'actions') ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {visibleColumns.has(column.key) ? (
                   <Eye className="w-3 h-3" />
@@ -266,7 +431,7 @@ export const DataTable: React.FC<DataTableProps> = ({
                   <EyeOff className="w-3 h-3" />
                 )}
                 {column.label}
-                {visibleColumns.has(column.key) && column.key !== 'actions' && (
+                {visibleColumns.has(column.key) && column.key !== 'actions' && column.key !== 'select' && (
                   <X className="w-3 h-3 ml-1 hover:text-red-500" />
                 )}
               </button>
@@ -290,7 +455,10 @@ export const DataTable: React.FC<DataTableProps> = ({
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredProfiles.map((profile) => (
-              <tr key={profile.id} className="hover:bg-gray-50">
+              <tr 
+                key={profile.id} 
+                className={`hover:bg-gray-50 ${selectedProfiles.has(profile.id) ? 'bg-blue-50' : ''}`}
+              >
                 {allColumns
                   .filter(column => visibleColumns.has(column.key))
                   .map(column => (

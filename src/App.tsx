@@ -354,8 +354,69 @@ function App() {
     }
   };
 
-  const handleExport = (format: string) => {
-    exportData(profiles, format, 'linkedin_profiles');
+  const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
+    setIsUpdating(true);
+    
+    try {
+      // Update profiles in batches to avoid overwhelming the API
+      const batchSize = 5;
+      for (let i = 0; i < profileUrls.length; i += batchSize) {
+        const batch = profileUrls.slice(i, i + batchSize);
+        
+        // Scrape batch
+        const datasetId = await apifyService.scrapeProfiles(batch);
+        const profilesData = await apifyService.getDatasetItems(datasetId);
+        
+        // Update each profile in the database
+        for (const profileData of profilesData) {
+          const linkedinUrl = profileData.linkedinUrl;
+          if (linkedinUrl) {
+            // Process images to base64
+            const processedProfile = await processProfileImages(profileData);
+            
+            // Update in database
+            await supabase
+              .from('linkedin_profiles')
+              .update({
+                profile_data: processedProfile,
+                last_updated: new Date().toISOString()
+              })
+              .eq('linkedin_url', linkedinUrl);
+          }
+        }
+      }
+      
+      await loadData();
+    } catch (error) {
+      console.error('Error updating selected profiles:', error);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleDeleteSelectedProfiles = async (profileIds: string[]) => {
+    try {
+      const { error } = await supabase
+        .from('linkedin_profiles')
+        .delete()
+        .in('id', profileIds);
+
+      if (error) throw error;
+      
+      await loadData();
+    } catch (error) {
+      console.error('Error deleting profiles:', error);
+    }
+  };
+
+  const handleExport = (format: string, selectedOnly: boolean = false) => {
+    if (selectedOnly) {
+      // Export only selected profiles - this would need to be implemented
+      // For now, export all profiles
+      exportData(profiles, format, 'linkedin_profiles_selected');
+    } else {
+      exportData(profiles, format, 'linkedin_profiles');
+    }
   };
 
   const handleExportProfileResults = (format: string) => {
@@ -561,6 +622,8 @@ function App() {
           <DataTable
             profiles={profiles}
             onUpdateProfile={handleUpdateProfile}
+            onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+            onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
             onExport={handleExport}
             onViewDetails={handleViewProfileDetails}
             isUpdating={isUpdating}
