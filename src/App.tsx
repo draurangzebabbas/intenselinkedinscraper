@@ -86,7 +86,7 @@ function App() {
     try {
       setConnectionError(''); // Clear any previous connection errors
       
-      // Load profiles
+      // Load profiles with better error handling
       const { data: profilesData, error: profilesError } = await supabase
         .from('linkedin_profiles')
         .select('*')
@@ -95,11 +95,15 @@ function App() {
 
       if (profilesError) {
         console.error('Profiles error:', profilesError);
+        // Check if it's a network error
+        if (profilesError.message.includes('Failed to fetch') || profilesError.message.includes('fetch')) {
+          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
+        }
         throw new Error(`Failed to load profiles: ${profilesError.message}`);
       }
       setProfiles(profilesData || []);
 
-      // Load jobs
+      // Load jobs with better error handling
       const { data: jobsData, error: jobsError } = await supabase
         .from('scraping_jobs')
         .select('*')
@@ -108,12 +112,34 @@ function App() {
 
       if (jobsError) {
         console.error('Jobs error:', jobsError);
+        // Check if it's a network error
+        if (jobsError.message.includes('Failed to fetch') || jobsError.message.includes('fetch')) {
+          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
+        }
         throw new Error(`Failed to load jobs: ${jobsError.message}`);
       }
       setJobs(jobsData || []);
     } catch (error) {
       console.error('Error loading data:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred while loading data';
+      let errorMessage = 'Unknown error occurred while loading data';
+      
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      
+      // Handle specific network errors
+      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('TypeError: Failed to fetch')) {
+        errorMessage = 'Network connection failed. This usually means:\n\n' +
+          '• Supabase environment variables are not configured correctly\n' +
+          '• Your Supabase project URL or API key is invalid\n' +
+          '• CORS is not configured properly in your Supabase project\n' +
+          '• Your Supabase project may be paused or inactive\n' +
+          '• Network connectivity issues\n\n' +
+          'Please check your Supabase configuration and try again.';
+      }
+      
       setConnectionError(errorMessage);
     }
   };
@@ -508,7 +534,7 @@ function App() {
   if (connectionError) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6">
+        <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2 bg-red-100 rounded-lg">
               <AlertCircle className="w-6 h-6 text-red-600" />
@@ -524,30 +550,43 @@ function App() {
             <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
               <li>Supabase environment variables are not configured</li>
               <li>The Supabase URL or API key is incorrect</li>
+              <li>CORS is not configured properly in your Supabase project</li>
+              <li>Your Supabase project may be paused or inactive</li>
               <li>Network connectivity issues</li>
-              <li>CORS configuration problems</li>
             </ul>
             
-            <div className="bg-gray-50 p-3 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-1">Error Details:</p>
-              <p className="text-sm text-red-600 font-mono">{connectionError}</p>
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <p className="text-sm font-medium text-gray-700 mb-2">Error Details:</p>
+              <pre className="text-sm text-red-600 whitespace-pre-wrap font-mono bg-white p-3 rounded border overflow-auto max-h-40">
+                {connectionError}
+              </pre>
             </div>
             
-            <div className="space-y-2">
+            <div className="space-y-3">
               <p className="text-sm font-medium text-gray-700">To fix this:</p>
               <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
                 <li>Click "Connect to Supabase" in the top right corner</li>
-                <li>Follow the setup instructions</li>
-                <li>Ensure your .env file has the correct values</li>
+                <li>Follow the setup instructions to get your Supabase URL and API key</li>
+                <li>Ensure your .env file has the correct VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY values</li>
+                <li>In your Supabase project, go to Settings → API → CORS and add http://localhost:5173</li>
+                <li>Make sure your Supabase project is not paused</li>
               </ol>
             </div>
             
-            <button
-              onClick={handleRetryConnection}
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Retry Connection
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={handleRetryConnection}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Retry Connection
+              </button>
+              <button
+                onClick={() => window.open('https://supabase.com/dashboard', '_blank')}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                Open Supabase Dashboard
+              </button>
+            </div>
           </div>
         </div>
       </div>
