@@ -6,6 +6,8 @@ import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
 import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
+import { Auth } from './components/Auth';
+import { UserMenu } from './components/UserMenu';
 import { supabase, testSupabaseConnection } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
@@ -47,11 +49,16 @@ interface CommentData {
 }
 
 function App() {
+  // Authentication state
+  const [user, setUser] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Application state
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [commentersData, setCommentersData] = useState<CommentData[]>([]);
   const [profileDetails, setProfileDetails] = useState<any[]>([]);
-  const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null); // New state for single profile details
+  const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
@@ -67,8 +74,57 @@ function App() {
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
   useEffect(() => {
-    initializeApp();
+    // Initialize authentication
+    initializeAuth();
   }, []);
+
+  useEffect(() => {
+    // Load data when user is authenticated
+    if (user) {
+      initializeApp();
+    }
+  }, [user]);
+
+  const initializeAuth = async () => {
+    try {
+      // Get initial session
+      const { data: { session }, error } = await supabase.auth.getSession();
+      
+      if (error) {
+        console.error('Error getting session:', error);
+      } else {
+        setUser(session?.user ?? null);
+      }
+
+      // Listen for auth changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        async (event, session) => {
+          console.log('Auth state changed:', event, session?.user?.email);
+          setUser(session?.user ?? null);
+          
+          if (event === 'SIGNED_OUT') {
+            // Clear application state on sign out
+            setProfiles([]);
+            setJobs([]);
+            setCommentersData([]);
+            setProfileDetails([]);
+            setSelectedProfileForDetails(null);
+            setActiveTab('scraper');
+            setCurrentView('form');
+            setConnectionError('');
+          }
+        }
+      );
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } catch (error) {
+      console.error('Auth initialization error:', error);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
 
   const initializeApp = async () => {
     // Test Supabase connection first
@@ -549,6 +605,26 @@ function App() {
     await initializeApp();
   };
 
+  // Show loading screen while checking authentication
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="p-3 bg-blue-100 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+            <Linkedin className="w-8 h-8 text-blue-600" />
+          </div>
+          <div className="text-lg font-medium text-gray-900 mb-2">LinkedIn Scraper</div>
+          <div className="text-gray-600">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show authentication screen if user is not logged in
+  if (!user) {
+    return <Auth onAuthSuccess={() => {}} />;
+  }
+
   // Show connection error banner if there's a connection issue
   if (connectionError) {
     return (
@@ -587,7 +663,7 @@ function App() {
                 <li>Click "Connect to Supabase" in the top right corner</li>
                 <li>Follow the setup instructions to get your Supabase URL and API key</li>
                 <li>Ensure your .env file has the correct VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY values</li>
-                <li>In your Supabase project, go to Settings → API → CORS and add http://localhost:5173</li>
+                <li>In your Supabase project, go to Settings → API → CORS and add your domain</li>
                 <li>Make sure your Supabase project is not paused</li>
               </ol>
             </div>
@@ -625,41 +701,45 @@ function App() {
               <h1 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h1>
             </div>
             
-            <nav className="flex space-x-1">
-              <button
-                onClick={() => handleTabChange('scraper')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'scraper'
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Activity className="w-4 h-4 inline mr-2" />
-                Scraper
-              </button>
-              <button
-                onClick={() => handleTabChange('profiles')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'profiles'
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Database className="w-4 h-4 inline mr-2" />
-                Profiles ({profiles.length})
-              </button>
-              <button
-                onClick={() => handleTabChange('jobs')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'jobs'
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-              >
-                <Activity className="w-4 h-4 inline mr-2" />
-                Jobs ({jobs.length})
-              </button>
-            </nav>
+            <div className="flex items-center gap-6">
+              <nav className="flex space-x-1">
+                <button
+                  onClick={() => handleTabChange('scraper')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'scraper'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <Activity className="w-4 h-4 inline mr-2" />
+                  Scraper
+                </button>
+                <button
+                  onClick={() => handleTabChange('profiles')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'profiles'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <Database className="w-4 h-4 inline mr-2" />
+                  Profiles ({profiles.length})
+                </button>
+                <button
+                  onClick={() => handleTabChange('jobs')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'jobs'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <Activity className="w-4 h-4 inline mr-2" />
+                  Jobs ({jobs.length})
+                </button>
+              </nav>
+
+              <UserMenu user={user} />
+            </div>
           </div>
         </div>
       </header>
