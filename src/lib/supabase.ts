@@ -46,9 +46,12 @@ export const testSupabaseConnection = async () => {
     
     // Test basic connection with timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased timeout to 15 seconds
     
     try {
+      // First try a simple health check
+      console.log('Attempting to connect to Supabase...')
+      
       const { data, error } = await supabase
         .from('linkedin_profiles')
         .select('count', { count: 'exact', head: true })
@@ -58,38 +61,101 @@ export const testSupabaseConnection = async () => {
       
       if (error) {
         console.error('Supabase connection test failed:', error)
+        console.error('Error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
         
-        // Provide more specific error messages
-        if (error.message.includes('Failed to fetch')) {
-          throw new Error('Network connection failed. This could be due to:\n\n• CORS not configured in your Supabase project\n• Invalid Supabase URL\n• Network connectivity issues\n• Supabase project is paused or inactive\n\nPlease check your Supabase project settings and ensure CORS is configured for http://localhost:5173');
-        } else if (error.message.includes('Invalid API key')) {
-          throw new Error('Invalid Supabase API key. Please check your VITE_SUPABASE_ANON_KEY in the .env file.');
+        // Provide more specific error messages based on error type
+        if (error.message.includes('Failed to fetch') || error.code === 'PGRST301') {
+          throw new Error(`Network connection failed. This could be due to:
+
+• CORS not configured in your Supabase project
+• Invalid Supabase URL: ${supabaseUrl}
+• Network connectivity issues
+• Supabase project is paused or inactive
+• Firewall blocking the connection
+
+Please check:
+1. Your Supabase project settings and ensure CORS is configured for http://localhost:5173
+2. That your Supabase project is active (not paused)
+3. Your network connection
+4. The Supabase URL is correct: ${supabaseUrl}`)
+        } else if (error.message.includes('Invalid API key') || error.code === '401') {
+          throw new Error('Invalid Supabase API key. Please check your VITE_SUPABASE_ANON_KEY in the .env file.')
         } else if (error.message.includes('relation') && error.message.includes('does not exist')) {
-          throw new Error('Database tables not found. Please ensure your Supabase database has been set up with the required tables (linkedin_profiles, scraping_jobs).');
+          throw new Error('Database tables not found. Please ensure your Supabase database has been set up with the required tables (linkedin_profiles, scraping_jobs).')
+        } else if (error.code === 'PGRST116') {
+          throw new Error('Table or schema not found. Please ensure your database migrations have been run and the tables exist.')
         }
         
-        throw new Error(`Supabase connection failed: ${error.message}`);
+        throw new Error(`Supabase connection failed: ${error.message}${error.details ? ` (${error.details})` : ''}`)
       }
       
       console.log('Supabase connection successful!')
+      console.log('Connection test result:', data)
       return { success: true, count: data }
+      
     } catch (fetchError) {
       clearTimeout(timeoutId);
       
       if (fetchError instanceof Error) {
         if (fetchError.name === 'AbortError') {
-          throw new Error('Connection timeout. Please check your network connection and Supabase project status.');
+          throw new Error(`Connection timeout after 15 seconds. This could indicate:
+
+• Network connectivity issues
+• Supabase project is paused or inactive
+• Firewall blocking the connection
+• Server overload
+
+Please check your network connection and Supabase project status.`)
         }
+        
+        // Re-throw the error if it's already been processed
         throw fetchError;
       }
-      throw new Error('Unknown connection error occurred.');
+      
+      throw new Error('Unknown connection error occurred.')
     }
     
   } catch (error) {
     console.error('Supabase connection test error:', error)
+    
+    // Enhanced error logging for debugging
+    if (error instanceof Error) {
+      console.error('Error name:', error.name)
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
+    
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown connection error' 
     }
+  }
+}
+
+// Additional utility function to check Supabase service status
+export const checkSupabaseStatus = async () => {
+  try {
+    // Try to reach Supabase status page or a simple endpoint
+    const response = await fetch('https://status.supabase.com/api/v2/status.json', {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+    
+    if (response.ok) {
+      const status = await response.json();
+      return { available: true, status };
+    }
+    
+    return { available: false, error: 'Status check failed' };
+  } catch (error) {
+    console.warn('Could not check Supabase status:', error);
+    return { available: false, error: 'Status check unavailable' };
   }
 }
