@@ -270,11 +270,12 @@ function App() {
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
       // Store new profiles in database and add to results
-      for (const profileData of newProfilesData) {
+      for (let i = 0; i < newProfilesData.length; i++) {
+        const profileData = newProfilesData[i];
         const linkedinUrl = profileData.linkedinUrl;
         if (linkedinUrl) {
           // Process images to base64
-          updateLoadingProgress('saving_data', 80, 'Converting profile images...');
+          updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Converting images for profile ${i + 1}/${newProfilesData.length}...`);
           const processedProfile = await processProfileImages(profileData);
           
           // Store in database
@@ -298,6 +299,7 @@ function App() {
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
     setIsLoading(true);
     setScrapingType('profile_details');
+    setLoadingError('');
     updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
     
     try {
@@ -307,6 +309,9 @@ function App() {
       setPreviousView('comments'); // Remember we came from comments
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
+      
+      // Refresh the main profiles data
+      await loadData();
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
       setLoadingError(error instanceof Error ? error.message : 'Unknown error occurred');
@@ -382,6 +387,15 @@ function App() {
     setCurrentView('profile-details');
   };
 
+  // Handle tab changes and ensure data is loaded
+  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
+    setActiveTab(tab);
+    if (tab === 'profiles') {
+      // Ensure profiles data is fresh when switching to profiles tab
+      await loadData();
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -397,7 +411,7 @@ function App() {
             
             <nav className="flex space-x-1">
               <button
-                onClick={() => setActiveTab('scraper')}
+                onClick={() => handleTabChange('scraper')}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   activeTab === 'scraper'
                     ? 'bg-blue-100 text-blue-700'
@@ -408,7 +422,7 @@ function App() {
                 Scraper
               </button>
               <button
-                onClick={() => setActiveTab('profiles')}
+                onClick={() => handleTabChange('profiles')}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   activeTab === 'profiles'
                     ? 'bg-blue-100 text-blue-700'
@@ -419,7 +433,7 @@ function App() {
                 Profiles ({profiles.length})
               </button>
               <button
-                onClick={() => setActiveTab('jobs')}
+                onClick={() => handleTabChange('jobs')}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   activeTab === 'jobs'
                     ? 'bg-blue-100 text-blue-700'
@@ -504,21 +518,15 @@ function App() {
                 onScrapeSelectedProfiles={handleScrapeSelectedCommenterProfiles}
                 isLoading={isLoading}
                 onBack={handleBackToForm}
+                loadingStage={loadingStage}
+                loadingProgress={loadingProgress}
+                loadingMessage={loadingMessage}
+                loadingError={loadingError}
               />
             )}
 
             {currentView === 'profile-table' && (
               <div className="space-y-6">
-                {isLoading && (
-                  <LoadingProgress
-                    type={scrapingType}
-                    stage={loadingStage}
-                    progress={loadingProgress}
-                    message={loadingMessage}
-                    error={loadingError}
-                  />
-                )}
-                
                 <ProfileResultsTable
                   profiles={profileDetails}
                   onViewDetails={handleViewProfileDetails}
