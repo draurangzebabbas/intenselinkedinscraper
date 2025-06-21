@@ -6,11 +6,11 @@ import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
 import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
-import { supabase } from './lib/supabase';
+import { supabase, testSupabaseConnection } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
 import { processProfileImages } from './utils/imageUtils';
-import { Linkedin, Database, Activity } from 'lucide-react';
+import { Linkedin, Database, Activity, AlertCircle } from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -56,6 +56,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles'>('form');
+  const [connectionError, setConnectionError] = useState<string>('');
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -65,11 +66,26 @@ function App() {
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
   useEffect(() => {
-    loadData();
+    initializeApp();
   }, []);
+
+  const initializeApp = async () => {
+    // Test Supabase connection first
+    const connectionTest = await testSupabaseConnection();
+    
+    if (!connectionTest.success) {
+      setConnectionError(connectionTest.error || 'Failed to connect to Supabase');
+      return;
+    }
+    
+    // If connection is successful, load data
+    await loadData();
+  };
 
   const loadData = async () => {
     try {
+      setConnectionError(''); // Clear any previous connection errors
+      
       // Load profiles
       const { data: profilesData, error: profilesError } = await supabase
         .from('linkedin_profiles')
@@ -77,7 +93,10 @@ function App() {
         .order('last_updated', { ascending: false })
         .limit(100);
 
-      if (profilesError) throw profilesError;
+      if (profilesError) {
+        console.error('Profiles error:', profilesError);
+        throw new Error(`Failed to load profiles: ${profilesError.message}`);
+      }
       setProfiles(profilesData || []);
 
       // Load jobs
@@ -87,10 +106,15 @@ function App() {
         .order('created_at', { ascending: false })
         .limit(50);
 
-      if (jobsError) throw jobsError;
+      if (jobsError) {
+        console.error('Jobs error:', jobsError);
+        throw new Error(`Failed to load jobs: ${jobsError.message}`);
+      }
       setJobs(jobsData || []);
     } catch (error) {
       console.error('Error loading data:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred while loading data';
+      setConnectionError(errorMessage);
     }
   };
 
@@ -101,6 +125,12 @@ function App() {
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
+    // Check connection before starting scraping
+    if (connectionError) {
+      alert('Cannot start scraping: Database connection error. Please check your Supabase configuration.');
+      return;
+    }
+
     setIsLoading(true);
     setScrapingType(type);
     setLoadingError('');
@@ -468,6 +498,61 @@ function App() {
       await loadData();
     }
   };
+
+  const handleRetryConnection = async () => {
+    setConnectionError('');
+    await initializeApp();
+  };
+
+  // Show connection error banner if there's a connection issue
+  if (connectionError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-red-100 rounded-lg">
+              <AlertCircle className="w-6 h-6 text-red-600" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900">Connection Error</h2>
+          </div>
+          
+          <div className="space-y-4">
+            <p className="text-gray-600">
+              Unable to connect to the database. This usually means:
+            </p>
+            
+            <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+              <li>Supabase environment variables are not configured</li>
+              <li>The Supabase URL or API key is incorrect</li>
+              <li>Network connectivity issues</li>
+              <li>CORS configuration problems</li>
+            </ul>
+            
+            <div className="bg-gray-50 p-3 rounded-lg">
+              <p className="text-sm font-medium text-gray-700 mb-1">Error Details:</p>
+              <p className="text-sm text-red-600 font-mono">{connectionError}</p>
+            </div>
+            
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700">To fix this:</p>
+              <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
+                <li>Click "Connect to Supabase" in the top right corner</li>
+                <li>Follow the setup instructions</li>
+                <li>Ensure your .env file has the correct values</li>
+              </ol>
+            </div>
+            
+            <button
+              onClick={handleRetryConnection}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Retry Connection
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
