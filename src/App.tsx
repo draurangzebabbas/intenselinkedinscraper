@@ -9,11 +9,11 @@ import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { Auth } from './components/Auth';
 import { UserMenu } from './components/UserMenu';
 import { UserProfile } from './components/UserProfile';
-import { supabase, testSupabaseConnection } from './lib/supabase';
+import { supabase, testSupabaseConnection, simpleConnectionTest } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
 import { processProfileImages } from './utils/imageUtils';
-import { Linkedin, Database, Activity, AlertCircle } from 'lucide-react';
+import { Linkedin, Database, Activity, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -66,6 +66,7 @@ function App() {
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
+  const [isRetrying, setIsRetrying] = useState(false);
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -153,13 +154,18 @@ function App() {
 
       if (profilesError) {
         console.error('Profiles error:', profilesError);
-        // Check if it's a network error
-        if (profilesError.message.includes('Failed to fetch') || profilesError.message.includes('fetch')) {
-          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
+        
+        // Handle specific errors
+        if (profilesError.code === 'PGRST116') {
+          // Table doesn't exist - this is OK for initial setup
+          console.log('Tables not found - this is normal for initial setup');
+          setProfiles([]);
+        } else {
+          throw new Error(`Failed to load profiles: ${profilesError.message}`);
         }
-        throw new Error(`Failed to load profiles: ${profilesError.message}`);
+      } else {
+        setProfiles(profilesData || []);
       }
-      setProfiles(profilesData || []);
 
       // Load jobs with better error handling
       const { data: jobsData, error: jobsError } = await supabase
@@ -170,13 +176,18 @@ function App() {
 
       if (jobsError) {
         console.error('Jobs error:', jobsError);
-        // Check if it's a network error
-        if (jobsError.message.includes('Failed to fetch') || jobsError.message.includes('fetch')) {
-          throw new Error('Network connection failed. Please check your internet connection and Supabase configuration.');
+        
+        // Handle specific errors
+        if (jobsError.code === 'PGRST116') {
+          // Table doesn't exist - this is OK for initial setup
+          console.log('Jobs table not found - this is normal for initial setup');
+          setJobs([]);
+        } else {
+          throw new Error(`Failed to load jobs: ${jobsError.message}`);
         }
-        throw new Error(`Failed to load jobs: ${jobsError.message}`);
+      } else {
+        setJobs(jobsData || []);
       }
-      setJobs(jobsData || []);
     } catch (error) {
       console.error('Error loading data:', error);
       let errorMessage = 'Unknown error occurred while loading data';
@@ -185,17 +196,6 @@ function App() {
         errorMessage = error.message;
       } else if (typeof error === 'string') {
         errorMessage = error;
-      }
-      
-      // Handle specific network errors
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('TypeError: Failed to fetch')) {
-        errorMessage = 'Network connection failed. This usually means:\n\n' +
-          '• Supabase environment variables are not configured correctly\n' +
-          '• Your Supabase project URL or API key is invalid\n' +
-          '• CORS is not configured properly in your Supabase project\n' +
-          '• Your Supabase project may be paused or inactive\n' +
-          '• Network connectivity issues\n\n' +
-          'Please check your Supabase configuration and try again.';
       }
       
       setConnectionError(errorMessage);
@@ -611,8 +611,24 @@ function App() {
   };
 
   const handleRetryConnection = async () => {
+    setIsRetrying(true);
     setConnectionError('');
-    await initializeApp();
+    
+    try {
+      // Try simple connection test first
+      const simpleTest = await simpleConnectionTest();
+      if (simpleTest.success) {
+        await initializeApp();
+      } else {
+        // Try full connection test
+        await initializeApp();
+      }
+    } catch (error) {
+      console.error('Retry failed:', error);
+      setConnectionError(error instanceof Error ? error.message : 'Retry failed');
+    } finally {
+      setIsRetrying(false);
+    }
   };
 
   // Show loading screen while checking authentication
@@ -649,21 +665,13 @@ function App() {
             <div className="p-2 bg-red-100 rounded-lg">
               <AlertCircle className="w-6 h-6 text-red-600" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900">Connection Error</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Connection Issue</h2>
           </div>
           
           <div className="space-y-4">
             <p className="text-gray-600">
-              Unable to connect to the database. This usually means:
+              There was an issue connecting to the database:
             </p>
-            
-            <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
-              <li>Supabase environment variables are not configured</li>
-              <li>The Supabase URL or API key is incorrect</li>
-              <li>CORS is not configured properly in your Supabase project</li>
-              <li>Your Supabase project may be paused or inactive</li>
-              <li>Network connectivity issues</li>
-            </ul>
             
             <div className="bg-gray-50 p-4 rounded-lg">
               <p className="text-sm font-medium text-gray-700 mb-2">Error Details:</p>
@@ -673,22 +681,32 @@ function App() {
             </div>
             
             <div className="space-y-3">
-              <p className="text-sm font-medium text-gray-700">To fix this:</p>
-              <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
-                <li>Click "Connect to Supabase" in the top right corner</li>
-                <li>Follow the setup instructions to get your Supabase URL and API key</li>
-                <li>Ensure your .env file has the correct VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY values</li>
-                <li>In your Supabase project, go to Settings → API → CORS and add your domain</li>
-                <li>Make sure your Supabase project is not paused</li>
-              </ol>
+              <p className="text-sm font-medium text-gray-700">This could be due to:</p>
+              <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
+                <li>Network connectivity issues</li>
+                <li>Supabase project configuration</li>
+                <li>Database tables not yet created (normal for first setup)</li>
+                <li>Temporary service interruption</li>
+              </ul>
             </div>
             
             <div className="flex gap-3">
               <button
                 onClick={handleRetryConnection}
-                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                disabled={isRetrying}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Retry Connection
+                {isRetrying ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Retrying...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Retry Connection
+                  </>
+                )}
               </button>
               <button
                 onClick={() => window.open('https://supabase.com/dashboard', '_blank')}
