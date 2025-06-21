@@ -634,7 +634,7 @@ function App() {
                 profiles={profileDetails}
                 onBack={() => {
                   setCurrentView('form');
-                  setActiveTab('profiles');
+                  setPreviousView('profiles');
                 }}
               />
             ) : (
