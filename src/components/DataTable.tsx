@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { 
   X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink,
-  CheckSquare, Square, Trash2, Users, Upload
+  CheckSquare, Square, Trash2, Users, Upload, MapPin, Building, Briefcase,
+  GraduationCap, Award, Mail, Phone, Globe
 } from 'lucide-react';
 
 interface Profile {
@@ -32,7 +33,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   isUpdating
 }) => {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(['select', 'name', 'headline', 'location', 'connections', 'updated', 'actions'])
+    new Set(['select', 'picture', 'name', 'headline', 'location', 'connections', 'company', 'updated', 'actions'])
   );
   const [filter, setFilter] = useState('');
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
@@ -47,9 +48,16 @@ export const DataTable: React.FC<DataTableProps> = ({
     { key: 'location', label: 'Location' },
     { key: 'connections', label: 'Connections' },
     { key: 'followers', label: 'Followers' },
-    { key: 'company', label: 'Company' },
+    { key: 'company', label: 'Current Company' },
+    { key: 'jobTitle', label: 'Job Title' },
+    { key: 'duration', label: 'Current Role Duration' },
     { key: 'experience', label: 'Experience' },
     { key: 'education', label: 'Education' },
+    { key: 'skills', label: 'Top Skills' },
+    { key: 'certifications', label: 'Certifications' },
+    { key: 'email', label: 'Email' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'website', label: 'Website' },
     { key: 'updated', label: 'Last Updated' },
     { key: 'actions', label: 'Actions' }
   ];
@@ -59,7 +67,7 @@ export const DataTable: React.FC<DataTableProps> = ({
     
     return profiles.filter(profile => {
       const data = profile.profile_data || {};
-      const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''}`.toLowerCase();
+      const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''} ${data.companyName || ''}`.toLowerCase();
       return searchText.includes(filter.toLowerCase());
     });
   }, [profiles, filter]);
@@ -194,9 +202,13 @@ export const DataTable: React.FC<DataTableProps> = ({
 
       case 'picture':
         return (
-          <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200">
-            {data.profilePic ? (
-              <img src={data.profilePic} alt={data.fullName || `${data.firstName} ${data.lastName}`} className="w-full h-full object-cover" />
+          <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 flex-shrink-0">
+            {data.profilePic || data.profilePicHighQuality ? (
+              <img 
+                src={data.profilePicHighQuality || data.profilePic} 
+                alt={data.fullName || `${data.firstName} ${data.lastName}`} 
+                className="w-full h-full object-cover" 
+              />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
                 No Photo
@@ -207,12 +219,12 @@ export const DataTable: React.FC<DataTableProps> = ({
       
       case 'name':
         return (
-          <div>
-            <div className="font-medium text-gray-900">
+          <div className="min-w-0">
+            <div className="font-medium text-gray-900 truncate">
               {data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim()}
             </div>
             <div className="text-sm text-blue-600 hover:underline">
-              <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
+              <a href={profile.linkedin_url || data.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
                 <ExternalLink className="w-3 h-3" />
                 View Profile
               </a>
@@ -223,7 +235,10 @@ export const DataTable: React.FC<DataTableProps> = ({
       case 'headline':
         return (
           <div className="max-w-xs">
-            <div className="text-sm text-gray-900 truncate" title={data.headline}>
+            <div 
+              className="text-sm text-gray-900 line-clamp-2" 
+              title={data.headline}
+            >
               {data.headline || 'No headline'}
             </div>
           </div>
@@ -231,29 +246,66 @@ export const DataTable: React.FC<DataTableProps> = ({
       
       case 'location':
         return (
-          <div className="text-sm text-gray-600">
-            {data.addressWithCountry || data.addressCountryOnly || 'Not specified'}
+          <div className="flex items-center gap-1 text-sm text-gray-600">
+            <MapPin className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">
+              {data.addressWithCountry || data.addressCountryOnly || data.addressWithoutCountry || 'Not specified'}
+            </span>
           </div>
         );
       
       case 'connections':
         return (
-          <div className="text-sm text-gray-900">
-            {data.connections?.toLocaleString() || '0'}
+          <div className="flex items-center gap-1 text-sm">
+            <Users className="w-4 h-4 text-blue-600" />
+            <span className="font-medium">
+              {data.connections?.toLocaleString() || '0'}
+            </span>
           </div>
         );
       
       case 'followers':
         return (
-          <div className="text-sm text-gray-900">
-            {data.followers?.toLocaleString() || '0'}
+          <div className="flex items-center gap-1 text-sm">
+            <Users className="w-4 h-4 text-green-600" />
+            <span className="font-medium">
+              {data.followers?.toLocaleString() || '0'}
+            </span>
           </div>
         );
       
       case 'company':
         return (
-          <div className="text-sm text-gray-900">
-            {data.companyName || data.experiences?.[0]?.companyName || 'Not specified'}
+          <div className="flex items-center gap-2">
+            <Building className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-gray-900 truncate">
+                {data.companyName || data.experiences?.[0]?.subtitle?.split(' · ')[0] || 'Not specified'}
+              </div>
+              {data.companyIndustry && (
+                <div className="text-xs text-gray-500 truncate">
+                  {data.companyIndustry}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      
+      case 'jobTitle':
+        return (
+          <div className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <span className="text-sm text-gray-900 truncate">
+              {data.jobTitle || data.experiences?.[0]?.title || 'Not specified'}
+            </span>
+          </div>
+        );
+      
+      case 'duration':
+        return (
+          <div className="flex items-center gap-1 text-sm text-gray-600">
+            <Calendar className="w-4 h-4" />
+            <span>{data.currentJobDuration || data.experiences?.[0]?.caption?.split(' · ')[1] || 'Not specified'}</span>
           </div>
         );
       
@@ -266,9 +318,84 @@ export const DataTable: React.FC<DataTableProps> = ({
       
       case 'education':
         return (
-          <div className="text-sm text-gray-600">
-            {data.educations?.length || 0} schools
+          <div className="flex items-center gap-1 text-sm text-gray-600">
+            <GraduationCap className="w-4 h-4" />
+            <span>{data.educations?.length || 0} schools</span>
           </div>
+        );
+      
+      case 'skills':
+        return (
+          <div className="max-w-xs">
+            {data.skills && data.skills.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {data.skills.slice(0, 3).map((skill: any, idx: number) => (
+                  <span 
+                    key={idx}
+                    className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800"
+                  >
+                    {skill.title}
+                  </span>
+                ))}
+                {data.skills.length > 3 && (
+                  <span className="text-xs text-gray-500">
+                    +{data.skills.length - 3} more
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="text-sm text-gray-500">No skills listed</span>
+            )}
+          </div>
+        );
+      
+      case 'certifications':
+        return (
+          <div className="flex items-center gap-1 text-sm text-gray-600">
+            <Award className="w-4 h-4" />
+            <span>{data.licenseAndCertificates?.length || 0} certs</span>
+          </div>
+        );
+      
+      case 'email':
+        return data.email ? (
+          <a 
+            href={`mailto:${data.email}`}
+            className="flex items-center gap-1 text-sm text-blue-600 hover:underline"
+          >
+            <Mail className="w-4 h-4" />
+            {data.email}
+          </a>
+        ) : (
+          <span className="text-sm text-gray-500">Not available</span>
+        );
+      
+      case 'phone':
+        return data.mobileNumber ? (
+          <a 
+            href={`tel:${data.mobileNumber}`}
+            className="flex items-center gap-1 text-sm text-blue-600 hover:underline"
+          >
+            <Phone className="w-4 h-4" />
+            {data.mobileNumber}
+          </a>
+        ) : (
+          <span className="text-sm text-gray-500">Not available</span>
+        );
+      
+      case 'website':
+        return data.creatorWebsite?.link ? (
+          <a 
+            href={data.creatorWebsite.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-sm text-blue-600 hover:underline"
+          >
+            <Globe className="w-4 h-4" />
+            {data.creatorWebsite.name || 'Website'}
+          </a>
+        ) : (
+          <span className="text-sm text-gray-500">Not available</span>
         );
       
       case 'updated':
@@ -300,7 +427,7 @@ export const DataTable: React.FC<DataTableProps> = ({
             )}
             
             <button
-              onClick={() => handleSingleProfileUpdate(profile.linkedin_url, profile.id)}
+              onClick={() => handleSingleProfileUpdate(profile.linkedin_url || data.linkedinUrl, profile.id)}
               disabled={isProfileUpdating}
               className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >

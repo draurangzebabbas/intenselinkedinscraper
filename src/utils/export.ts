@@ -25,31 +25,85 @@ export const exportData = (data: any[], format: string, filename: string = 'link
 const exportToCSV = (data: any[], filename: string) => {
   if (data.length === 0) return;
 
-  // Flatten the profile data for CSV export
+  // Flatten the profile data for CSV export with all available fields
   const flattenedData = data.map(profile => {
     const element = profile.profile_data || {};
     return {
+      // Basic Info
       id: profile.id,
-      linkedin_url: profile.linkedin_url,
+      linkedin_url: profile.linkedin_url || element.linkedinUrl,
+      public_identifier: element.publicIdentifier || '',
       first_name: element.firstName || '',
       last_name: element.lastName || '',
       full_name: element.fullName || `${element.firstName || ''} ${element.lastName || ''}`.trim(),
       headline: element.headline || '',
       about: element.about || '',
-      location: element.addressWithCountry || element.addressCountryOnly || '',
+      
+      // Location
+      address_with_country: element.addressWithCountry || '',
+      address_country_only: element.addressCountryOnly || '',
+      address_without_country: element.addressWithoutCountry || '',
+      
+      // Metrics
       connections: element.connections || 0,
       followers: element.followers || 0,
-      current_company: element.companyName || element.experiences?.[0]?.companyName || '',
+      
+      // Current Job
       job_title: element.jobTitle || '',
+      company_name: element.companyName || '',
       company_industry: element.companyIndustry || '',
+      company_website: element.companyWebsite || '',
+      company_linkedin: element.companyLinkedin || '',
+      company_founded_in: element.companyFoundedIn || '',
       company_size: element.companySize || '',
       current_job_duration: element.currentJobDuration || '',
+      current_job_duration_years: element.currentJobDurationInYrs || 0,
+      
+      // Contact
       email: element.email || '',
       mobile_number: element.mobileNumber || '',
+      
+      // Profile Images
+      profile_pic: element.profilePic || '',
+      profile_pic_high_quality: element.profilePicHighQuality || '',
+      
+      // Website
+      creator_website_name: element.creatorWebsite?.name || '',
+      creator_website_link: element.creatorWebsite?.link || '',
+      
+      // Counts
       experience_count: element.experiences?.length || 0,
       education_count: element.educations?.length || 0,
       skills_count: element.skills?.length || 0,
-      top_skills: element.skills?.slice(0, 5).map((s: any) => s.title).join('; ') || '',
+      certifications_count: element.licenseAndCertificates?.length || 0,
+      publications_count: element.publications?.length || 0,
+      volunteer_count: element.volunteerAndAwards?.length || 0,
+      
+      // Top Skills (first 10)
+      top_skills: element.skills?.slice(0, 10).map((s: any) => s.title).join('; ') || '',
+      
+      // Latest Experience
+      latest_experience_title: element.experiences?.[0]?.title || '',
+      latest_experience_company: element.experiences?.[0]?.subtitle?.split(' · ')[0] || '',
+      latest_experience_duration: element.experiences?.[0]?.caption || '',
+      latest_experience_location: element.experiences?.[0]?.metadata || '',
+      
+      // Latest Education
+      latest_education_school: element.educations?.[0]?.title || '',
+      latest_education_degree: element.educations?.[0]?.subtitle || '',
+      latest_education_period: element.educations?.[0]?.caption || '',
+      
+      // Latest Certification
+      latest_certification: element.licenseAndCertificates?.[0]?.title || '',
+      latest_certification_issuer: element.licenseAndCertificates?.[0]?.subtitle || '',
+      latest_certification_date: element.licenseAndCertificates?.[0]?.caption || '',
+      
+      // Metadata
+      open_connection: element.openConnection || false,
+      urn: element.urn || '',
+      top_skills_by_endorsements: element.topSkillsByEndorsements || '',
+      
+      // Timestamps
       last_updated: profile.last_updated || '',
       created_at: profile.created_at || ''
     };

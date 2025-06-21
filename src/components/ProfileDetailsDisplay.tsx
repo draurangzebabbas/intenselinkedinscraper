@@ -1,5 +1,5 @@
 import React from 'react';
-import { User, MapPin, Users, Briefcase, GraduationCap, Award, ArrowLeft, ExternalLink, Mail, Phone } from 'lucide-react';
+import { User, MapPin, Users, Briefcase, GraduationCap, Award, ArrowLeft, ExternalLink, Mail, Phone, Globe, Calendar, Building } from 'lucide-react';
 
 interface ProfileDetailsDisplayProps {
   profiles: any[];
@@ -23,7 +23,7 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-8 text-white">
           <div className="flex items-start gap-6">
             <div className="w-24 h-24 rounded-full overflow-hidden bg-white/20 flex-shrink-0">
-              {profile.profilePic ? (
+              {profile.profilePicHighQuality || profile.profilePic ? (
                 <img 
                   src={profile.profilePicHighQuality || profile.profilePic} 
                   alt={profile.fullName}
@@ -37,14 +37,16 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
             </div>
             
             <div className="flex-1 min-w-0">
-              <h2 className="text-2xl font-bold mb-2">{profile.fullName || `${profile.firstName} ${profile.lastName}`}</h2>
+              <h2 className="text-2xl font-bold mb-2">
+                {profile.fullName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim()}
+              </h2>
               <p className="text-blue-100 text-lg mb-3">{profile.headline}</p>
               
               <div className="flex flex-wrap gap-4 text-sm text-blue-100">
-                {profile.addressWithCountry && (
+                {(profile.addressWithCountry || profile.addressCountryOnly || profile.addressWithoutCountry) && (
                   <div className="flex items-center gap-1">
                     <MapPin className="w-4 h-4" />
-                    <span>{profile.addressWithCountry}</span>
+                    <span>{profile.addressWithCountry || profile.addressCountryOnly || profile.addressWithoutCountry}</span>
                   </div>
                 )}
                 
@@ -91,6 +93,18 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
                     Call
                   </a>
                 )}
+
+                {profile.creatorWebsite?.link && (
+                  <a
+                    href={profile.creatorWebsite.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
+                  >
+                    <Globe className="w-4 h-4" />
+                    {profile.creatorWebsite.name || 'Website'}
+                  </a>
+                )}
               </div>
             </div>
           </div>
@@ -112,7 +126,7 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
           )}
 
           {/* Current Job */}
-          {profile.jobTitle && (
+          {(profile.jobTitle || profile.companyName) && (
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Briefcase className="w-5 h-5 text-blue-600" />
@@ -121,10 +135,22 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="font-medium text-gray-900">{profile.jobTitle}</div>
                 {profile.companyName && (
-                  <div className="text-gray-600">{profile.companyName}</div>
+                  <div className="text-gray-600 flex items-center gap-2 mt-1">
+                    <Building className="w-4 h-4" />
+                    {profile.companyName}
+                  </div>
                 )}
                 {profile.currentJobDuration && (
-                  <div className="text-sm text-gray-500 mt-1">{profile.currentJobDuration}</div>
+                  <div className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+                    <Calendar className="w-4 h-4" />
+                    {profile.currentJobDuration}
+                  </div>
+                )}
+                {profile.companyIndustry && (
+                  <div className="text-sm text-gray-500 mt-1">{profile.companyIndustry}</div>
+                )}
+                {profile.companySize && (
+                  <div className="text-sm text-gray-500 mt-1">{profile.companySize} employees</div>
                 )}
               </div>
             </div>
@@ -135,16 +161,16 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Briefcase className="w-5 h-5 text-blue-600" />
-                Experience
+                Experience ({profile.experiences.length})
               </h3>
               <div className="space-y-4">
-                {profile.experiences.slice(0, 3).map((exp: any, idx: number) => (
+                {profile.experiences.slice(0, 5).map((exp: any, idx: number) => (
                   <div key={idx} className="bg-gray-50 p-4 rounded-lg">
                     <div className="flex items-start gap-3">
                       {exp.logo && (
-                        <img src={exp.logo} alt="" className="w-12 h-12 rounded object-cover" />
+                        <img src={exp.logo} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
                       )}
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <div className="font-medium text-gray-900">{exp.title}</div>
                         <div className="text-gray-600">{exp.subtitle}</div>
                         <div className="text-sm text-gray-500">{exp.caption}</div>
@@ -160,6 +186,11 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
                     </div>
                   </div>
                 ))}
+                {profile.experiences.length > 5 && (
+                  <div className="text-center text-sm text-gray-500">
+                    ... and {profile.experiences.length - 5} more positions
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -169,18 +200,28 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <GraduationCap className="w-5 h-5 text-blue-600" />
-                Education
+                Education ({profile.educations.length})
               </h3>
               <div className="space-y-4">
                 {profile.educations.map((edu: any, idx: number) => (
                   <div key={idx} className="bg-gray-50 p-4 rounded-lg">
                     <div className="flex items-start gap-3">
                       {edu.logo && (
-                        <img src={edu.logo} alt="" className="w-12 h-12 rounded object-cover" />
+                        <img src={edu.logo} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
                       )}
                       <div className="flex-1">
                         <div className="font-medium text-gray-900">{edu.title}</div>
                         <div className="text-gray-600">{edu.subtitle}</div>
+                        {edu.caption && (
+                          <div className="text-sm text-gray-500">{edu.caption}</div>
+                        )}
+                        {edu.subComponents && edu.subComponents[0]?.description && (
+                          <div className="mt-2 text-sm text-gray-700">
+                            {edu.subComponents[0].description.map((desc: any, i: number) => (
+                              <div key={i}>{desc.text}</div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -194,10 +235,10 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Award className="w-5 h-5 text-blue-600" />
-                Skills
+                Skills ({profile.skills.length})
               </h3>
               <div className="flex flex-wrap gap-2">
-                {profile.skills.slice(0, 10).map((skill: any, idx: number) => (
+                {profile.skills.map((skill: any, idx: number) => (
                   <span 
                     key={idx}
                     className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium"
@@ -214,14 +255,14 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Award className="w-5 h-5 text-blue-600" />
-                Certifications
+                Certifications ({profile.licenseAndCertificates.length})
               </h3>
               <div className="space-y-3">
-                {profile.licenseAndCertificates.slice(0, 3).map((cert: any, idx: number) => (
+                {profile.licenseAndCertificates.map((cert: any, idx: number) => (
                   <div key={idx} className="bg-gray-50 p-3 rounded-lg">
                     <div className="flex items-start gap-3">
                       {cert.logo && (
-                        <img src={cert.logo} alt="" className="w-10 h-10 rounded object-cover" />
+                        <img src={cert.logo} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
                       )}
                       <div className="flex-1">
                         <div className="font-medium text-gray-900">{cert.title}</div>
@@ -229,6 +270,58 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
                         {cert.caption && (
                           <div className="text-sm text-gray-500">{cert.caption}</div>
                         )}
+                        {cert.metadata && (
+                          <div className="text-sm text-gray-500">{cert.metadata}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Publications */}
+          {profile.publications && profile.publications.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <Award className="w-5 h-5 text-blue-600" />
+                Publications ({profile.publications.length})
+              </h3>
+              <div className="space-y-3">
+                {profile.publications.map((pub: any, idx: number) => (
+                  <div key={idx} className="bg-gray-50 p-3 rounded-lg">
+                    <div className="font-medium text-gray-900">{pub.title}</div>
+                    <div className="text-gray-600">{pub.subtitle}</div>
+                    {pub.subComponents && pub.subComponents[0]?.description && (
+                      <div className="mt-2 text-sm text-gray-700">
+                        {pub.subComponents[0].description[0]?.text}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Volunteer Experience */}
+          {profile.volunteerAndAwards && profile.volunteerAndAwards.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <Award className="w-5 h-5 text-blue-600" />
+                Volunteer Experience ({profile.volunteerAndAwards.length})
+              </h3>
+              <div className="space-y-3">
+                {profile.volunteerAndAwards.map((vol: any, idx: number) => (
+                  <div key={idx} className="bg-gray-50 p-3 rounded-lg">
+                    <div className="flex items-start gap-3">
+                      {vol.logo && (
+                        <img src={vol.logo} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                      )}
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-900">{vol.title}</div>
+                        <div className="text-gray-600">{vol.subtitle}</div>
+                        <div className="text-sm text-gray-500">{vol.caption}</div>
                       </div>
                     </div>
                   </div>
@@ -264,6 +357,19 @@ export const ProfileDetailsDisplay: React.FC<ProfileDetailsDisplayProps> = ({
                   LinkedIn Profile
                 </a>
               </div>
+              {profile.creatorWebsite?.link && (
+                <div className="flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-blue-600" />
+                  <a 
+                    href={profile.creatorWebsite.link} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {profile.creatorWebsite.name || 'Personal Website'}
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         </div>
