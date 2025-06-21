@@ -51,10 +51,11 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [commentersData, setCommentersData] = useState<CommentData[]>([]);
   const [profileDetails, setProfileDetails] = useState<any[]>([]);
+  const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null); // New state for single profile details
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
   
@@ -488,6 +489,7 @@ function App() {
     setCurrentView('form');
     setCommentersData([]);
     setProfileDetails([]);
+    setSelectedProfileForDetails(null);
     setPreviousView('form');
     setLoadingStage('starting');
     setLoadingProgress(0);
@@ -512,12 +514,18 @@ function App() {
     // Set the previous view based on current context
     if (activeTab === 'profiles') {
       setPreviousView('profiles-list');
+      setSelectedProfileForDetails(profile);
+      setCurrentView('single-profile-details');
     } else {
       setPreviousView(currentView);
+      setProfileDetails([profile]);
+      setCurrentView('profile-details');
     }
-    
-    setProfileDetails([profile]);
-    setCurrentView('profile-details');
+  };
+
+  const handleBackToProfilesList = () => {
+    setCurrentView('profiles-list');
+    setSelectedProfileForDetails(null);
   };
 
   // Handle tab changes and ensure data is loaded
@@ -764,13 +772,10 @@ function App() {
 
         {activeTab === 'profiles' && (
           <>
-            {currentView === 'profile-details' ? (
+            {currentView === 'single-profile-details' ? (
               <ProfileDetailsDisplay
-                profiles={profileDetails}
-                onBack={() => {
-                  setCurrentView('profiles-list');
-                  setPreviousView('profiles-list');
-                }}
+                profiles={selectedProfileForDetails ? [selectedProfileForDetails] : []}
+                onBack={handleBackToProfilesList}
               />
             ) : (
               <DataTable
