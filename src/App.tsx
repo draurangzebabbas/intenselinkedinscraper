@@ -211,6 +211,7 @@ function App() {
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
+        setPreviousView('form'); // Set previous view to form for single profile scraping
         setCurrentView('profile-table');
         
         updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
@@ -247,6 +248,7 @@ function App() {
           
           updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
+          setPreviousView('form'); // Set previous view to form for mixed scraping
           setCurrentView('profile-table');
         }
 
