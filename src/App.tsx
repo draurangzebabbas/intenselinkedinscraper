@@ -8,6 +8,7 @@ import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { Auth } from './components/Auth';
 import { UserMenu } from './components/UserMenu';
+import { UserProfile } from './components/UserProfile';
 import { supabase, testSupabaseConnection } from './lib/supabase';
 import { apifyService } from './lib/apify';
 import { exportData } from './utils/export';
@@ -62,7 +63,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
   
@@ -584,6 +585,15 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
+  const handleOpenUserProfile = () => {
+    setCurrentView('user-profile');
+  };
+
+  const handleBackFromUserProfile = () => {
+    setCurrentView('form');
+    setActiveTab('scraper');
+  };
+
   // Handle tab changes and ensure data is loaded
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
@@ -623,6 +633,11 @@ function App() {
   // Show authentication screen if user is not logged in
   if (!user) {
     return <Auth onAuthSuccess={() => {}} />;
+  }
+
+  // Show user profile if that view is active
+  if (currentView === 'user-profile') {
+    return <UserProfile user={user} onBack={handleBackFromUserProfile} />;
   }
 
   // Show connection error banner if there's a connection issue
@@ -738,7 +753,7 @@ function App() {
                 </button>
               </nav>
 
-              <UserMenu user={user} />
+              <UserMenu user={user} onOpenProfile={handleOpenUserProfile} />
             </div>
           </div>
         </div>
