@@ -22,11 +22,26 @@ export const testSupabaseConnection = async () => {
       throw new Error('Supabase environment variables are not configured. Please check your .env file and ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set correctly.')
     }
     
+    // Check if environment variables contain placeholder values
+    if (supabaseUrl.includes('your_supabase_project_url_here') || supabaseAnonKey.includes('your_supabase_anon_key_here')) {
+      throw new Error('Please replace the placeholder values in your .env file with your actual Supabase project URL and API key. You can find these in your Supabase Dashboard > Settings > API.')
+    }
+    
     // Validate URL format
     try {
       new URL(supabaseUrl);
     } catch {
       throw new Error('VITE_SUPABASE_URL is not a valid URL format. Please check your Supabase project URL.');
+    }
+    
+    // Validate that the URL looks like a Supabase URL
+    if (!supabaseUrl.includes('.supabase.co')) {
+      throw new Error('VITE_SUPABASE_URL does not appear to be a valid Supabase URL. It should look like: https://your-project-id.supabase.co');
+    }
+    
+    // Validate that the API key looks like a JWT token
+    if (!supabaseAnonKey.startsWith('eyJ')) {
+      throw new Error('VITE_SUPABASE_ANON_KEY does not appear to be a valid Supabase API key. It should start with "eyJ" and be a JWT token.');
     }
     
     // Test basic connection with timeout
