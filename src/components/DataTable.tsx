@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar } from 'lucide-react';
+import { X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink } from 'lucide-react';
 
 interface Profile {
   id: string;
@@ -13,6 +13,7 @@ interface DataTableProps {
   profiles: Profile[];
   onUpdateProfile: (profileUrl: string) => Promise<void>;
   onExport: (format: string) => void;
+  onViewDetails?: (profile: any) => void;
   isUpdating: boolean;
 }
 
@@ -20,6 +21,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   profiles,
   onUpdateProfile,
   onExport,
+  onViewDetails,
   isUpdating
 }) => {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
@@ -110,7 +112,8 @@ export const DataTable: React.FC<DataTableProps> = ({
               {data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim()}
             </div>
             <div className="text-sm text-blue-600 hover:underline">
-              <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer">
+              <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
+                <ExternalLink className="w-3 h-3" />
                 View Profile
               </a>
             </div>
@@ -183,14 +186,26 @@ export const DataTable: React.FC<DataTableProps> = ({
       
       case 'actions':
         return (
-          <button
-            onClick={() => onUpdateProfile(profile.linkedin_url)}
-            disabled={isUpdating}
-            className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <RefreshCw className={`w-4 h-4 ${isUpdating ? 'animate-spin' : ''}`} />
-            Update Info
-          </button>
+          <div className="flex gap-2">
+            {onViewDetails && (
+              <button
+                onClick={() => onViewDetails(data)}
+                className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              >
+                <Eye className="w-4 h-4" />
+                Details
+              </button>
+            )}
+            
+            <button
+              onClick={() => onUpdateProfile(profile.linkedin_url)}
+              disabled={isUpdating}
+              className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${isUpdating ? 'animate-spin' : ''}`} />
+              Update
+            </button>
+          </div>
         );
       
       default:

@@ -55,7 +55,7 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
-  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table'>('form');
+  const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles'>('form');
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -376,13 +376,16 @@ function App() {
   const handleBackToPrevious = () => {
     if (previousView === 'comments') {
       setCurrentView('comments');
+    } else if (previousView === 'profiles') {
+      setActiveTab('profiles');
+      setCurrentView('form');
     } else {
       setCurrentView('form');
     }
   };
 
   const handleViewProfileDetails = (profile: any) => {
-    setPreviousView(currentView); // Remember where we came from
+    setPreviousView(activeTab === 'profiles' ? 'profiles' : currentView); // Remember where we came from
     setProfileDetails([profile]);
     setCurrentView('profile-details');
   };
@@ -559,6 +562,7 @@ function App() {
             profiles={profiles}
             onUpdateProfile={handleUpdateProfile}
             onExport={handleExport}
+            onViewDetails={handleViewProfileDetails}
             isUpdating={isUpdating}
           />
         )}
