@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { 
   User, MapPin, Users, Briefcase, GraduationCap, Award, 
   Eye, EyeOff, Filter, Download, RefreshCw, ExternalLink,
-  Mail, Phone, Building, Calendar, Star, X
+  Mail, Phone, Building, Calendar, Star, X, ChevronDown,
+  CheckSquare, Square, Save, Tag, Plus
 } from 'lucide-react';
 
 interface ProfileResultsTableProps {
@@ -10,8 +11,10 @@ interface ProfileResultsTableProps {
   onViewDetails: (profile: any) => void;
   onUpdateProfile?: (profileUrl: string) => Promise<void>;
   onExport?: (format: string) => void;
+  onStoreSelectedProfiles?: (profiles: any[], tags: string[]) => Promise<void>;
   isUpdating?: boolean;
   showActions?: boolean;
+  showStoreOption?: boolean;
 }
 
 export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
@@ -19,15 +22,38 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
   onViewDetails,
   onUpdateProfile,
   onExport,
+  onStoreSelectedProfiles,
   isUpdating = false,
-  showActions = true
+  showActions = true,
+  showStoreOption = false
 }) => {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(['picture', 'name', 'headline', 'location', 'connections', 'company', 'actions'])
+    new Set(['select', 'picture', 'name', 'headline', 'location', 'connections', 'company', 'actions'])
   );
   const [filter, setFilter] = useState('');
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
+  const [showStoreModal, setShowStoreModal] = useState(false);
+  const [storeTags, setStoreTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState('');
+  const [isStoring, setIsStoring] = useState(false);
+  
+  // Data filters
+  const [dataFilters, setDataFilters] = useState({
+    hasEmail: false,
+    hasPhone: false,
+    hasWebsite: false,
+    hasSkills: false,
+    hasExperience: false,
+    hasEducation: false,
+    hasCertifications: false,
+    hasAbout: false,
+    hasLocation: false,
+    hasCurrentJob: false
+  });
+  const [showDataFilters, setShowDataFilters] = useState(false);
 
   const allColumns = [
+    { key: 'select', label: 'Select' },
     { key: 'picture', label: 'Picture' },
     { key: 'name', label: 'Name' },
     { key: 'headline', label: 'Headline' },
@@ -47,14 +73,48 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
     { key: 'actions', label: 'Actions' }
   ];
 
-  const filteredProfiles = useMemo(() => {
-    if (!filter) return profiles;
-    
+  // Remove duplicates based on LinkedIn URL
+  const uniqueProfiles = useMemo(() => {
+    const seen = new Set();
     return profiles.filter(profile => {
-      const searchText = `${profile.fullName || ''} ${profile.headline || ''} ${profile.addressWithCountry || ''} ${profile.companyName || ''}`.toLowerCase();
-      return searchText.includes(filter.toLowerCase());
+      const url = profile.linkedinUrl || profile.linkedin_url;
+      if (seen.has(url)) {
+        return false;
+      }
+      seen.add(url);
+      return true;
     });
-  }, [profiles, filter]);
+  }, [profiles]);
+
+  const filteredProfiles = useMemo(() => {
+    let filtered = uniqueProfiles;
+    
+    // Apply text filter
+    if (filter) {
+      filtered = filtered.filter(profile => {
+        const searchText = `${profile.fullName || ''} ${profile.headline || ''} ${profile.addressWithCountry || ''} ${profile.companyName || ''}`.toLowerCase();
+        return searchText.includes(filter.toLowerCase());
+      });
+    }
+    
+    // Apply data presence filters
+    filtered = filtered.filter(profile => {
+      if (dataFilters.hasEmail && !profile.email) return false;
+      if (dataFilters.hasPhone && !profile.mobileNumber) return false;
+      if (dataFilters.hasWebsite && !profile.creatorWebsite?.link) return false;
+      if (dataFilters.hasSkills && (!profile.skills || profile.skills.length === 0)) return false;
+      if (dataFilters.hasExperience && (!profile.experiences || profile.experiences.length === 0)) return false;
+      if (dataFilters.hasEducation && (!profile.educations || profile.educations.length === 0)) return false;
+      if (dataFilters.hasCertifications && (!profile.licenseAndCertificates || profile.licenseAndCertificates.length === 0)) return false;
+      if (dataFilters.hasAbout && !profile.about) return false;
+      if (dataFilters.hasLocation && !profile.addressWithCountry && !profile.addressCountryOnly && !profile.addressWithoutCountry) return false;
+      if (dataFilters.hasCurrentJob && !profile.jobTitle && !profile.companyName) return false;
+      
+      return true;
+    });
+    
+    return filtered;
+  }, [uniqueProfiles, filter, dataFilters]);
 
   const toggleColumn = (columnKey: string) => {
     const newVisible = new Set(visibleColumns);
@@ -66,8 +126,96 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
     setVisibleColumns(newVisible);
   };
 
+  const toggleDataFilter = (filterKey: keyof typeof dataFilters) => {
+    setDataFilters(prev => ({
+      ...prev,
+      [filterKey]: !prev[filterKey]
+    }));
+  };
+
+  const clearAllDataFilters = () => {
+    setDataFilters({
+      hasEmail: false,
+      hasPhone: false,
+      hasWebsite: false,
+      hasSkills: false,
+      hasExperience: false,
+      hasEducation: false,
+      hasCertifications: false,
+      hasAbout: false,
+      hasLocation: false,
+      hasCurrentJob: false
+    });
+  };
+
+  const getActiveFiltersCount = () => {
+    return Object.values(dataFilters).filter(Boolean).length;
+  };
+
+  const toggleProfileSelection = (profileUrl: string) => {
+    const newSelected = new Set(selectedProfiles);
+    if (newSelected.has(profileUrl)) {
+      newSelected.delete(profileUrl);
+    } else {
+      newSelected.add(profileUrl);
+    }
+    setSelectedProfiles(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedProfiles.size === filteredProfiles.length) {
+      setSelectedProfiles(new Set());
+    } else {
+      setSelectedProfiles(new Set(filteredProfiles.map(p => p.linkedinUrl)));
+    }
+  };
+
+  const addTag = () => {
+    if (newTag.trim() && !storeTags.includes(newTag.trim())) {
+      setStoreTags(prev => [...prev, newTag.trim()]);
+      setNewTag('');
+    }
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    setStoreTags(prev => prev.filter(tag => tag !== tagToRemove));
+  };
+
+  const handleStoreProfiles = async () => {
+    if (selectedProfiles.size === 0) return;
+    
+    setIsStoring(true);
+    try {
+      const profilesToStore = filteredProfiles.filter(p => selectedProfiles.has(p.linkedinUrl));
+      if (onStoreSelectedProfiles) {
+        await onStoreSelectedProfiles(profilesToStore, storeTags);
+      }
+      setShowStoreModal(false);
+      setSelectedProfiles(new Set());
+      setStoreTags([]);
+    } catch (error) {
+      console.error('Error storing profiles:', error);
+    } finally {
+      setIsStoring(false);
+    }
+  };
+
   const renderCell = (profile: any, columnKey: string) => {
     switch (columnKey) {
+      case 'select':
+        return (
+          <button
+            onClick={() => toggleProfileSelection(profile.linkedinUrl)}
+            className="text-blue-600 hover:text-blue-800"
+          >
+            {selectedProfiles.has(profile.linkedinUrl) ? (
+              <CheckSquare className="w-5 h-5" />
+            ) : (
+              <Square className="w-5 h-5" />
+            )}
+          </button>
+        );
+
       case 'picture':
         return (
           <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 flex-shrink-0">
@@ -305,6 +453,16 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <h3 className="text-xl font-bold text-gray-900">
             Profile Results ({filteredProfiles.length})
+            {selectedProfiles.size > 0 && (
+              <span className="ml-2 text-sm font-normal text-blue-600">
+                ({selectedProfiles.size} selected)
+              </span>
+            )}
+            {getActiveFiltersCount() > 0 && (
+              <span className="ml-2 text-sm font-normal text-green-600">
+                ({getActiveFiltersCount()} filters active)
+              </span>
+            )}
           </h3>
           
           <div className="flex flex-col sm:flex-row gap-3">
@@ -317,6 +475,67 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
                 onChange={(e) => setFilter(e.target.value)}
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+            </div>
+            
+            {/* Data Filters Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDataFilters(!showDataFilters)}
+                className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
+                  getActiveFiltersCount() > 0 
+                    ? 'border-green-500 bg-green-50 text-green-700' 
+                    : 'border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <Filter className="w-4 h-4" />
+                Data Filters
+                {getActiveFiltersCount() > 0 && (
+                  <span className="bg-green-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {getActiveFiltersCount()}
+                  </span>
+                )}
+                <ChevronDown className={`w-4 h-4 transition-transform ${showDataFilters ? 'rotate-180' : ''}`} />
+              </button>
+              
+              {showDataFilters && (
+                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-gray-900">Show profiles with:</h4>
+                    <button
+                      onClick={clearAllDataFilters}
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {[
+                      { key: 'hasEmail', label: 'Email address', icon: Mail },
+                      { key: 'hasPhone', label: 'Phone number', icon: Phone },
+                      { key: 'hasWebsite', label: 'Website', icon: ExternalLink },
+                      { key: 'hasLocation', label: 'Location', icon: MapPin },
+                      { key: 'hasCurrentJob', label: 'Current job', icon: Briefcase },
+                      { key: 'hasAbout', label: 'About section', icon: Users },
+                      { key: 'hasSkills', label: 'Skills', icon: Award },
+                      { key: 'hasExperience', label: 'Experience', icon: Briefcase },
+                      { key: 'hasEducation', label: 'Education', icon: GraduationCap },
+                      { key: 'hasCertifications', label: 'Certifications', icon: Award }
+                    ].map(({ key, label, icon: Icon }) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+                        <input
+                          type="checkbox"
+                          checked={dataFilters[key as keyof typeof dataFilters]}
+                          onChange={() => toggleDataFilter(key as keyof typeof dataFilters)}
+                          className="text-blue-600 focus:ring-blue-500"
+                        />
+                        <Icon className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm text-gray-700">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             
             {onExport && (
@@ -332,6 +551,37 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
               </select>
             )}
           </div>
+        </div>
+
+        {/* Selection and Store Actions */}
+        <div className="mt-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              {selectedProfiles.size === filteredProfiles.length && filteredProfiles.length > 0 ? (
+                <CheckSquare className="w-4 h-4" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
+              {selectedProfiles.size === filteredProfiles.length && filteredProfiles.length > 0 ? 'Deselect All' : 'Select All'}
+            </button>
+            
+            <span className="text-sm text-gray-600">
+              {selectedProfiles.size} of {filteredProfiles.length} selected
+            </span>
+          </div>
+
+          {showStoreOption && selectedProfiles.size > 0 && (
+            <button
+              onClick={() => setShowStoreModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+            >
+              <Save className="w-4 h-4" />
+              Store Selected Profiles ({selectedProfiles.size})
+            </button>
+          )}
         </div>
 
         <div className="mt-4">
@@ -352,7 +602,7 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
                   <EyeOff className="w-3 h-3" />
                 )}
                 {column.label}
-                {visibleColumns.has(column.key) && column.key !== 'actions' && (
+                {visibleColumns.has(column.key) && column.key !== 'actions' && column.key !== 'select' && (
                   <X className="w-3 h-3 ml-1 hover:text-red-500" />
                 )}
               </button>
@@ -376,7 +626,7 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredProfiles.map((profile, index) => (
-              <tr key={profile.linkedinUrl || index} className="hover:bg-gray-50">
+              <tr key={profile.linkedinUrl || index} className={`hover:bg-gray-50 ${selectedProfiles.has(profile.linkedinUrl) ? 'bg-blue-50' : ''}`}>
                 {allColumns
                   .filter(column => visibleColumns.has(column.key))
                   .map(column => (
@@ -393,7 +643,86 @@ export const ProfileResultsTable: React.FC<ProfileResultsTableProps> = ({
       {filteredProfiles.length === 0 && (
         <div className="text-center py-12">
           <User className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <div className="text-gray-500">No profiles found</div>
+          <div className="text-gray-500">
+            {getActiveFiltersCount() > 0 ? 'No profiles match the selected filters' : 'No profiles found'}
+          </div>
+          {getActiveFiltersCount() > 0 && (
+            <button
+              onClick={clearAllDataFilters}
+              className="mt-2 text-blue-600 hover:text-blue-800 text-sm"
+            >
+              Clear all filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Store Profiles Modal */}
+      {showStoreModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Store {selectedProfiles.size} Profiles
+            </h3>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Add Tags (optional)
+              </label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && addTag()}
+                  placeholder="Enter tag name"
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <button
+                  onClick={addTag}
+                  className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {storeTags.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {storeTags.map(tag => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
+                    >
+                      <Tag className="w-3 h-3" />
+                      {tag}
+                      <button
+                        onClick={() => removeTag(tag)}
+                        className="hover:text-red-600"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowStoreModal(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStoreProfiles}
+                disabled={isStoring}
+                className="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                {isStoring ? 'Storing...' : 'Store Profiles'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

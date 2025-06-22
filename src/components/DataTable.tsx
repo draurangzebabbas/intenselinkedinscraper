@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink,
   CheckSquare, Square, Trash2, Users, Upload, MapPin, Building, Briefcase,
-  GraduationCap, Award, Mail, Phone, Globe, ChevronDown
+  GraduationCap, Award, Mail, Phone, Globe, ChevronDown, Tag
 } from 'lucide-react';
 
 interface Profile {
@@ -11,6 +11,7 @@ interface Profile {
   profile_data: any;
   last_updated: string | null;
   created_at: string | null;
+  tags?: string[];
 }
 
 interface DataTableProps {
@@ -33,7 +34,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   isUpdating
 }) => {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(['select', 'picture', 'name', 'headline', 'location', 'connections', 'company', 'updated', 'actions'])
+    new Set(['select', 'picture', 'name', 'headline', 'location', 'connections', 'company', 'tags', 'updated', 'actions'])
   );
   const [filter, setFilter] = useState('');
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
@@ -73,18 +74,33 @@ export const DataTable: React.FC<DataTableProps> = ({
     { key: 'email', label: 'Email' },
     { key: 'phone', label: 'Phone' },
     { key: 'website', label: 'Website' },
+    { key: 'tags', label: 'Tags' },
     { key: 'updated', label: 'Last Updated' },
     { key: 'actions', label: 'Actions' }
   ];
 
+  // Remove duplicates based on LinkedIn URL
+  const uniqueProfiles = useMemo(() => {
+    const seen = new Set();
+    return profiles.filter(profile => {
+      const url = profile.linkedin_url;
+      if (seen.has(url)) {
+        return false;
+      }
+      seen.add(url);
+      return true;
+    });
+  }, [profiles]);
+
   const filteredProfiles = useMemo(() => {
-    let filtered = profiles;
+    let filtered = uniqueProfiles;
     
     // Apply text filter
     if (filter) {
       filtered = filtered.filter(profile => {
         const data = profile.profile_data || {};
-        const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''} ${data.companyName || ''}`.toLowerCase();
+        const tags = profile.tags || [];
+        const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''} ${data.companyName || ''} ${tags.join(' ')}`.toLowerCase();
         return searchText.includes(filter.toLowerCase());
       });
     }
@@ -108,7 +124,7 @@ export const DataTable: React.FC<DataTableProps> = ({
     });
     
     return filtered;
-  }, [profiles, filter, dataFilters]);
+  }, [uniqueProfiles, filter, dataFilters]);
 
   const toggleColumn = (columnKey: string) => {
     if (columnKey === 'select' || columnKey === 'actions') return; // Don't allow hiding these
@@ -460,6 +476,32 @@ export const DataTable: React.FC<DataTableProps> = ({
           </a>
         ) : (
           <span className="text-sm text-gray-500">Not available</span>
+        );
+
+      case 'tags':
+        return (
+          <div className="max-w-xs">
+            {profile.tags && profile.tags.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {profile.tags.slice(0, 3).map((tag, idx) => (
+                  <span 
+                    key={idx}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-800"
+                  >
+                    <Tag className="w-3 h-3" />
+                    {tag}
+                  </span>
+                ))}
+                {profile.tags.length > 3 && (
+                  <span className="text-xs text-gray-500">
+                    +{profile.tags.length - 3} more
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="text-sm text-gray-500">No tags</span>
+            )}
+          </div>
         );
       
       case 'updated':

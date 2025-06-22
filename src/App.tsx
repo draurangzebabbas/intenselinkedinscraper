@@ -309,17 +309,6 @@ function App() {
     const datasetId = await apifyService.scrapeProfiles(profileUrls);
     const profilesData = await apifyService.getDatasetItems(datasetId);
     
-    // Store profiles in local state
-    const newProfiles = profilesData.map((profile: any) => ({
-      id: Date.now().toString() + Math.random(),
-      linkedin_url: profile.linkedinUrl,
-      profile_data: profile,
-      last_updated: new Date().toISOString(),
-      created_at: new Date().toISOString()
-    }));
-    
-    setProfiles(prev => [...prev, ...newProfiles]);
-    
     return profilesData;
   };
 
@@ -359,6 +348,37 @@ function App() {
       updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleStoreSelectedProfiles = async (profilesToStore: any[], tags: string[]) => {
+    try {
+      // Remove duplicates based on LinkedIn URL
+      const uniqueProfiles = profilesToStore.filter((profile, index, self) => 
+        index === self.findIndex(p => p.linkedinUrl === profile.linkedinUrl)
+      );
+
+      // Store profiles in local state with tags
+      const newProfiles = uniqueProfiles.map((profile: any) => ({
+        id: Date.now().toString() + Math.random(),
+        linkedin_url: profile.linkedinUrl,
+        profile_data: profile,
+        tags: tags,
+        last_updated: new Date().toISOString(),
+        created_at: new Date().toISOString()
+      }));
+      
+      // Check for existing profiles and avoid duplicates
+      const existingUrls = new Set(profiles.map(p => p.linkedin_url));
+      const filteredNewProfiles = newProfiles.filter(p => !existingUrls.has(p.linkedin_url));
+      
+      setProfiles(prev => [...prev, ...filteredNewProfiles]);
+      
+      alert(`Successfully stored ${filteredNewProfiles.length} unique profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
+      
+    } catch (error) {
+      console.error('Error storing profiles:', error);
+      alert('Error storing profiles. Please try again.');
     }
   };
 
@@ -663,7 +683,9 @@ function App() {
                   profiles={profileDetails}
                   onViewDetails={handleViewProfileDetails}
                   onExport={handleExportProfileResults}
+                  onStoreSelectedProfiles={handleStoreSelectedProfiles}
                   showActions={false}
+                  showStoreOption={true}
                 />
                 
                 <div className="flex justify-center">
