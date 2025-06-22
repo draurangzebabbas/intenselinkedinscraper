@@ -45,7 +45,7 @@ npm install
    - Go to [supabase.com/dashboard](https://supabase.com/dashboard)
    - Click "New Project"
    - Choose your organization and enter project details
-   - Wait for the project to be created
+   - Wait for the project to be created (this can take a few minutes)
 
 2. **Get your Supabase credentials**:
    - Go to Settings > API
@@ -54,12 +54,17 @@ npm install
 3. **Configure authentication**:
    - Go to Authentication > Settings
    - Configure your site URL (for local development: `http://localhost:5173`)
-   - Disable email confirmations for easier testing (optional)
+   - **IMPORTANT**: Disable email confirmations for easier testing:
+     - Go to Authentication > Settings
+     - Under "Email Auth", toggle OFF "Enable email confirmations"
    - Configure email templates if needed
 
-4. **Run database migrations**:
+4. **Database Setup**:
    - The project includes comprehensive database migrations
-   - These will be automatically applied when you first connect
+   - After connecting to Supabase, the migrations will be automatically applied
+   - If you encounter database errors during signup, you may need to manually run the migration:
+     - Go to your Supabase Dashboard > SQL Editor
+     - Run the migration file: `supabase/migrations/fix_auth_schema.sql`
 
 ### 3. Apify Setup
 
@@ -90,6 +95,54 @@ npm run dev
 
 The application will be available at `http://localhost:5173`
 
+## Troubleshooting Authentication Issues
+
+If you encounter "Database error saving new user" during signup:
+
+### Quick Fix
+1. **Disable Email Confirmations**:
+   - Go to your Supabase Dashboard
+   - Navigate to Authentication > Settings
+   - Under "Email Auth", toggle OFF "Enable email confirmations"
+   - Try signing up again
+
+### Database Schema Fix
+If the issue persists, the database schema may need to be fixed:
+
+1. **Go to Supabase Dashboard**:
+   - Open your project dashboard
+   - Navigate to SQL Editor
+
+2. **Run the Auth Schema Fix**:
+   - Copy the contents of `supabase/migrations/fix_auth_schema.sql`
+   - Paste and run it in the SQL Editor
+   - This will ensure all auth tables and triggers are properly configured
+
+3. **Verify Tables Exist**:
+   - Go to Database > Table Editor
+   - Ensure you can see the `users` table in the public schema
+   - Check that the `auth.users` table exists in the auth schema
+
+### Common Issues and Solutions
+
+1. **"User already registered" Error**:
+   - The email is already in use
+   - Try signing in instead or use a different email
+
+2. **"Database error saving new user"**:
+   - Usually indicates missing database schema
+   - Run the auth schema fix migration
+   - Ensure email confirmations are disabled for testing
+
+3. **Network/Connection Errors**:
+   - Check your internet connection
+   - Verify Supabase URL and API key are correct
+   - Ensure your Supabase project is active (not paused)
+
+4. **RLS (Row Level Security) Issues**:
+   - The migration includes proper RLS policies
+   - If you still have issues, check the Supabase logs for specific errors
+
 ## Database Schema
 
 The application uses a comprehensive database schema with the following main tables:
@@ -101,6 +154,7 @@ The application uses a comprehensive database schema with the following main tab
 - **export_history**: Log data export operations
 - **contact_attempts**: Track outreach efforts and responses
 - **profile_analytics**: Store computed metrics and scores
+- **users**: User profile information (linked to auth.users)
 
 ## Key Features Explained
 
@@ -128,8 +182,8 @@ Profiles are indexed for fast searching across:
 
 ### 1. User Registration
 - Create an account with email and password
-- Confirm email if email confirmation is enabled
-- Access the main dashboard
+- If email confirmation is enabled, check your email for the confirmation link
+- Access the main dashboard after confirmation
 
 ### 2. Scraping LinkedIn Data
 - **Post Comments**: Extract all commenters from a LinkedIn post
@@ -189,8 +243,14 @@ Profiles are indexed for fast searching across:
    - Check email confirmation settings
    - Verify redirect URLs in Supabase
    - Clear browser cache and cookies
+   - Run the auth schema fix migration if needed
 
-3. **Scraping Failures**:
+3. **Database Errors**:
+   - Ensure all migrations have been applied
+   - Check Supabase logs for specific error messages
+   - Verify RLS policies are correctly configured
+
+4. **Scraping Failures**:
    - Verify Apify API key
    - Check LinkedIn URL format
    - Monitor Apify usage limits
@@ -200,6 +260,7 @@ Profiles are indexed for fast searching across:
 - Check the browser console for error messages
 - Review Supabase logs in the dashboard
 - Monitor Apify run logs for scraping issues
+- Ensure all database migrations have been applied
 
 ## Contributing
 

@@ -74,8 +74,10 @@ export const Signup: React.FC<SignupProps> = ({ onSuccess, onSwitchToLogin }) =>
     }
 
     try {
+      console.log('Attempting to create user account...');
+      
       const { data, error } = await supabase.auth.signUp({
-        email: formData.email.trim(),
+        email: formData.email.trim().toLowerCase(),
         password: formData.password,
         options: {
           data: {
@@ -87,30 +89,54 @@ export const Signup: React.FC<SignupProps> = ({ onSuccess, onSwitchToLogin }) =>
       });
 
       if (error) {
+        console.error('Signup error:', error);
+        
+        // Handle specific error cases with more helpful messages
         if (error.message.includes('User already registered')) {
           setError('An account with this email already exists. Please sign in instead.');
         } else if (error.message.includes('Password should be')) {
           setError('Password does not meet the minimum requirements.');
         } else if (error.message.includes('Invalid email')) {
           setError('Please enter a valid email address.');
+        } else if (error.message.includes('Database error saving new user')) {
+          setError('There was a problem creating your account. This may be a temporary issue with our service. Please try again in a few moments, or contact support if the problem persists.');
+        } else if (error.message.includes('unexpected_failure')) {
+          setError('An unexpected error occurred while creating your account. Please try again, or contact support if this continues to happen.');
+        } else if (error.message.includes('timeout') || error.message.includes('network')) {
+          setError('Network connection issue. Please check your internet connection and try again.');
         } else {
-          setError(error.message);
+          setError(`Account creation failed: ${error.message}`);
         }
         return;
       }
 
       if (data.user) {
+        console.log('User created successfully:', data.user.id);
+        
         if (data.user.email_confirmed_at) {
           // User is immediately confirmed (email confirmation disabled)
+          console.log('User confirmed immediately, proceeding to app...');
           onSuccess();
         } else {
           // Email confirmation required
+          console.log('Email confirmation required');
           setSuccess(true);
         }
       }
     } catch (err) {
-      console.error('Signup error:', err);
-      setError('An unexpected error occurred. Please try again.');
+      console.error('Unexpected signup error:', err);
+      
+      if (err instanceof Error) {
+        if (err.message.includes('Failed to fetch') || err.message.includes('network')) {
+          setError('Network connection failed. Please check your internet connection and try again.');
+        } else if (err.message.includes('timeout')) {
+          setError('Request timed out. Please try again.');
+        } else {
+          setError(`An unexpected error occurred: ${err.message}`);
+        }
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
