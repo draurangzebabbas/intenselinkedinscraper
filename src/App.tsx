@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ScrapingForm } from './components/ScrapingForm';
 import { DataTable } from './components/DataTable';
 import { CommentResults } from './components/CommentResults';
@@ -7,6 +7,7 @@ import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
+import { supabase } from './lib/supabase';
 import { Linkedin, Database, Activity } from 'lucide-react';
 
 interface CommentData {
@@ -41,12 +42,13 @@ function App() {
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   
-  // Simple API key management
+  // Database-integrated API key management
   const [apifyKeys, setApifyKeys] = useState<ApifyKey[]>([]);
   const [selectedKeyId, setSelectedKeyId] = useState<string>('');
   const [showKeyForm, setShowKeyForm] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyValue, setNewKeyValue] = useState('');
+  const [isLoadingKeys, setIsLoadingKeys] = useState(true);
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -55,13 +57,76 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
+  // Load API keys from database and environment on component mount
+  useEffect(() => {
+    loadApifyKeys();
+  }, []);
+
+  const loadApifyKeys = async () => {
+    setIsLoadingKeys(true);
+    try {
+      // First, try to load from environment variable
+      const envKey = import.meta.env.VITE_APIFY_API_KEY;
+      const keys: ApifyKey[] = [];
+      
+      if (envKey) {
+        keys.push({
+          id: 'env-key',
+          name: 'Environment Key',
+          key: envKey
+        });
+      }
+
+      // Then load from database (if we have user authentication)
+      try {
+        const { data: dbKeys, error } = await supabase
+          .from('apify_keys')
+          .select('id, key_name, api_key, is_active')
+          .eq('is_active', true);
+
+        if (!error && dbKeys) {
+          const formattedDbKeys = dbKeys.map(key => ({
+            id: key.id,
+            name: key.key_name,
+            key: key.api_key
+          }));
+          keys.push(...formattedDbKeys);
+        }
+      } catch (dbError) {
+        console.log('Database not available, using local storage fallback');
+        // Fallback to localStorage for keys
+        const storedKeys = localStorage.getItem('apify_keys');
+        if (storedKeys) {
+          try {
+            const parsedKeys = JSON.parse(storedKeys);
+            keys.push(...parsedKeys);
+          } catch (parseError) {
+            console.error('Error parsing stored keys:', parseError);
+          }
+        }
+      }
+
+      setApifyKeys(keys);
+      
+      // Auto-select the first available key
+      if (keys.length > 0 && !selectedKeyId) {
+        setSelectedKeyId(keys[0].id);
+      }
+      
+    } catch (error) {
+      console.error('Error loading API keys:', error);
+    } finally {
+      setIsLoadingKeys(false);
+    }
+  };
+
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
     setLoadingStage(stage);
     setLoadingProgress(progress);
     setLoadingMessage(message);
   };
 
-  const addApifyKey = () => {
+  const addApifyKey = async () => {
     if (!newKeyName.trim() || !newKeyValue.trim()) return;
     
     const newKey: ApifyKey = {
@@ -69,6 +134,29 @@ function App() {
       name: newKeyName.trim(),
       key: newKeyValue.trim()
     };
+    
+    try {
+      // Try to save to database first
+      const { error } = await supabase
+        .from('apify_keys')
+        .insert({
+          key_name: newKey.name,
+          api_key: newKey.key,
+          is_active: true
+        });
+
+      if (error) {
+        console.log('Database not available, saving to localStorage');
+        // Fallback to localStorage
+        const updatedKeys = [...apifyKeys, newKey];
+        localStorage.setItem('apify_keys', JSON.stringify(updatedKeys));
+      }
+    } catch (dbError) {
+      console.log('Database not available, saving to localStorage');
+      // Fallback to localStorage
+      const updatedKeys = [...apifyKeys, newKey];
+      localStorage.setItem('apify_keys', JSON.stringify(updatedKeys));
+    }
     
     setApifyKeys(prev => [...prev, newKey]);
     if (!selectedKeyId) {
@@ -80,10 +168,36 @@ function App() {
     setShowKeyForm(false);
   };
 
-  const removeApifyKey = (keyId: string) => {
-    setApifyKeys(prev => prev.filter(k => k.id !== keyId));
+  const removeApifyKey = async (keyId: string) => {
+    // Don't allow removing the environment key
+    if (keyId === 'env-key') {
+      alert('Cannot remove the environment API key');
+      return;
+    }
+
+    try {
+      // Try to remove from database
+      const { error } = await supabase
+        .from('apify_keys')
+        .delete()
+        .eq('id', keyId);
+
+      if (error) {
+        console.log('Database not available, removing from localStorage');
+      }
+    } catch (dbError) {
+      console.log('Database not available, removing from localStorage');
+    }
+
+    const updatedKeys = apifyKeys.filter(k => k.id !== keyId);
+    setApifyKeys(updatedKeys);
+    
+    // Update localStorage
+    const localKeys = updatedKeys.filter(k => k.id !== 'env-key');
+    localStorage.setItem('apify_keys', JSON.stringify(localKeys));
+    
     if (selectedKeyId === keyId) {
-      const remaining = apifyKeys.filter(k => k.id !== keyId);
+      const remaining = updatedKeys;
       setSelectedKeyId(remaining.length > 0 ? remaining[0].id : '');
     }
   };
@@ -96,6 +210,12 @@ function App() {
     const selectedKey = getSelectedKey();
     if (!selectedKey) {
       alert('Please add and select an Apify API key first');
+      return;
+    }
+
+    // Validate the API key format
+    if (!selectedKey.key || selectedKey.key.length < 10) {
+      alert('Invalid API key. Please check your Apify API key and try again.');
       return;
     }
 
@@ -170,6 +290,10 @@ function App() {
           errorMessage = 'Network connection failed. Please check your internet connection and try again.';
         } else if (errorMessage.includes('timeout')) {
           errorMessage = 'Request timed out. The service may be slow to respond. Please try again.';
+        } else if (errorMessage.includes('API key') || errorMessage.includes('authentication') || errorMessage.includes('unauthorized')) {
+          errorMessage = 'Invalid or expired API key. Please check your Apify API key and try again.';
+        } else if (errorMessage.includes('Cannot reach Apify API')) {
+          errorMessage = 'Cannot connect to Apify API. Please verify your API key is correct and try again.';
         }
       }
       
@@ -227,6 +351,8 @@ function App() {
         errorMessage = error.message;
         if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
           errorMessage = 'Network connection failed. Please check your internet connection and try again.';
+        } else if (errorMessage.includes('API key') || errorMessage.includes('authentication')) {
+          errorMessage = 'Invalid or expired API key. Please check your Apify API key and try again.';
         }
       }
       setLoadingError(errorMessage);
@@ -361,6 +487,7 @@ function App() {
             <button
               onClick={() => setShowKeyForm(!showKeyForm)}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              disabled={isLoadingKeys}
             >
               Add Key
             </button>
@@ -401,41 +528,57 @@ function App() {
             </div>
           )}
 
-          <div className="space-y-2">
-            {apifyKeys.map(key => (
-              <div
-                key={key.id}
-                className={`p-3 border rounded-lg flex items-center justify-between ${
-                  selectedKeyId === key.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <input
-                    type="radio"
-                    checked={selectedKeyId === key.id}
-                    onChange={() => setSelectedKeyId(key.id)}
-                    className="text-blue-600"
-                  />
-                  <div>
-                    <div className="font-medium">{key.name}</div>
-                    <div className="text-sm text-gray-500 font-mono">
-                      {'•'.repeat(20)}
+          {isLoadingKeys ? (
+            <div className="text-center py-4">
+              <div className="text-gray-500">Loading API keys...</div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {apifyKeys.map(key => (
+                <div
+                  key={key.id}
+                  className={`p-3 border rounded-lg flex items-center justify-between ${
+                    selectedKeyId === key.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      checked={selectedKeyId === key.id}
+                      onChange={() => setSelectedKeyId(key.id)}
+                      className="text-blue-600"
+                    />
+                    <div>
+                      <div className="font-medium">
+                        {key.name}
+                        {key.id === 'env-key' && (
+                          <span className="ml-2 px-2 py-1 text-xs bg-green-100 text-green-800 rounded">
+                            ENV
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-500 font-mono">
+                        {'•'.repeat(20)}
+                      </div>
                     </div>
                   </div>
+                  {key.id !== 'env-key' && (
+                    <button
+                      onClick={() => removeApifyKey(key.id)}
+                      className="text-red-600 hover:text-red-800"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
-                <button
-                  onClick={() => removeApifyKey(key.id)}
-                  className="text-red-600 hover:text-red-800"
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
-          {apifyKeys.length === 0 && (
+          {apifyKeys.length === 0 && !isLoadingKeys && (
             <div className="text-center py-8 text-gray-500">
               <p>No API keys found. Add your first Apify API key to get started.</p>
+              <p className="text-sm mt-2">You can also set VITE_APIFY_API_KEY in your environment variables.</p>
             </div>
           )}
         </div>
@@ -447,7 +590,7 @@ function App() {
                 <ScrapingForm 
                   onScrape={handleScrape} 
                   isLoading={isLoading}
-                  disabled={!selectedKeyId}
+                  disabled={!selectedKeyId || isLoadingKeys}
                 />
                 
                 {isLoading && (
