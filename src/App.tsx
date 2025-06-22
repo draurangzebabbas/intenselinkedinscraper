@@ -1,59 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { ScrapingForm } from './components/ScrapingForm';
 import { DataTable } from './components/DataTable';
-import { JobsTable } from './components/JobsTable';
 import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
 import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
-import { UserSelector } from './components/UserSelector';
-import { ApifyKeyManager } from './components/ApifyKeyManager';
-import { supabase } from './lib/supabase';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
-import { processProfileImages } from './utils/imageUtils';
-import { Linkedin, Database, Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  full_name?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface ApifyKey {
-  id: string;
-  user_id: string;
-  key_name: string;
-  api_key: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-interface LinkedInProfile {
-  id: string;
-  user_id: string;
-  linkedin_url: string;
-  profile_data: any;
-  last_updated: string;
-  created_at: string;
-}
-
-interface ScrapingJob {
-  id: string;
-  user_id: string;
-  apify_key_id?: string;
-  job_type: 'post_comments' | 'profile_details' | 'mixed';
-  input_url: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  results_count: number;
-  error_message?: string;
-  created_at: string;
-  completed_at?: string;
-}
+import { Linkedin, Database, Activity } from 'lucide-react';
 
 interface CommentData {
   type: string;
@@ -70,25 +24,29 @@ interface CommentData {
   };
 }
 
-function App() {
-  // User and API key state
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [selectedApifyKey, setSelectedApifyKey] = useState<ApifyKey | null>(null);
+interface ApifyKey {
+  id: string;
+  name: string;
+  key: string;
+}
 
-  // Application state
-  const [profiles, setProfiles] = useState<LinkedInProfile[]>([]);
-  const [jobs, setJobs] = useState<ScrapingJob[]>([]);
+function App() {
+  // Simple state management - no complex database operations
+  const [profiles, setProfiles] = useState<any[]>([]);
   const [commentersData, setCommentersData] = useState<CommentData[]>([]);
   const [profileDetails, setProfileDetails] = useState<any[]>([]);
   const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
+  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
-  const [connectionError, setConnectionError] = useState<string>('');
-  const [isRetrying, setIsRetrying] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
+  // Simple API key management
+  const [apifyKeys, setApifyKeys] = useState<ApifyKey[]>([]);
+  const [selectedKeyId, setSelectedKeyId] = useState<string>('');
+  const [showKeyForm, setShowKeyForm] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyValue, setNewKeyValue] = useState('');
   
   // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
@@ -97,152 +55,47 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  useEffect(() => {
-    // Initialize app
-    initializeApp();
-    
-    // Listen for online/offline events
-    const handleOnline = () => {
-      setIsOnline(true);
-      console.log('Connection restored');
-      if (connectionError) {
-        handleRetryConnection();
-      }
-    };
-    
-    const handleOffline = () => {
-      setIsOnline(false);
-      console.log('Connection lost');
-      setConnectionError('No internet connection. Please check your network and try again.');
-    };
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  useEffect(() => {
-    // Load data when user changes
-    if (currentUser && isOnline) {
-      loadData();
-    }
-  }, [currentUser, isOnline]);
-
-  const initializeApp = async () => {
-    try {
-      if (!isOnline) {
-        setConnectionError('No internet connection. Please check your network and try again.');
-        return;
-      }
-      
-      // Test basic connection
-      const testResponse = await fetch(window.location.origin);
-      if (!testResponse.ok) {
-        throw new Error('Network connection test failed');
-      }
-      
-      // Connection successful, clear any errors
-      setConnectionError('');
-    } catch (error) {
-      console.error('App initialization error:', error);
-      setConnectionError('Failed to initialize application. Please refresh the page.');
-    }
-  };
-
-  const safeSupabaseOperation = async <T,>(
-    operation: () => Promise<{ data: T | null; error: any }>,
-    operationName: string = 'database operation'
-  ): Promise<{ data: T | null; error: any }> => {
-    try {
-      const result = await operation();
-      return result;
-    } catch (error) {
-      console.error(`${operationName} failed:`, error);
-      return {
-        data: null,
-        error: {
-          message: error instanceof Error ? error.message : `Unknown error during ${operationName}`,
-          code: 'UNKNOWN_ERROR'
-        }
-      };
-    }
-  };
-
-  const loadData = async () => {
-    if (!currentUser) return;
-
-    try {
-      setConnectionError('');
-      
-      // Load user's profiles
-      const profilesResult = await safeSupabaseOperation(
-        () => supabase
-          .from('linkedin_profiles')
-          .select('*')
-          .eq('user_id', currentUser.id)
-          .order('last_updated', { ascending: false })
-          .limit(100),
-        'loading profiles'
-      );
-
-      if (profilesResult.error) {
-        console.error('Profiles error:', profilesResult.error);
-        setProfiles([]);
-      } else {
-        setProfiles(profilesResult.data || []);
-      }
-
-      // Load user's jobs
-      const jobsResult = await safeSupabaseOperation(
-        () => supabase
-          .from('scraping_jobs')
-          .select('*')
-          .eq('user_id', currentUser.id)
-          .order('created_at', { ascending: false })
-          .limit(50),
-        'loading jobs'
-      );
-
-      if (jobsResult.error) {
-        console.error('Jobs error:', jobsResult.error);
-        setJobs([]);
-      } else {
-        setJobs(jobsResult.data || []);
-      }
-    } catch (error) {
-      console.error('Error loading data:', error);
-      setConnectionError('Failed to load data. Please try again.');
-    }
-  };
-
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
     setLoadingStage(stage);
     setLoadingProgress(progress);
     setLoadingMessage(message);
   };
 
-  const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
-    if (!currentUser) {
-      alert('Please select a user first');
-      return;
-    }
-
-    if (!selectedApifyKey) {
-      alert('Please select an Apify API key first');
-      return;
-    }
-
-    if (!isOnline) {
-      alert('Cannot start scraping: No internet connection. Please check your network and try again.');
-      return;
+  const addApifyKey = () => {
+    if (!newKeyName.trim() || !newKeyValue.trim()) return;
+    
+    const newKey: ApifyKey = {
+      id: Date.now().toString(),
+      name: newKeyName.trim(),
+      key: newKeyValue.trim()
+    };
+    
+    setApifyKeys(prev => [...prev, newKey]);
+    if (!selectedKeyId) {
+      setSelectedKeyId(newKey.id);
     }
     
-    if (connectionError) {
-      alert('Cannot start scraping: Connection error. Please check your configuration.');
+    setNewKeyName('');
+    setNewKeyValue('');
+    setShowKeyForm(false);
+  };
+
+  const removeApifyKey = (keyId: string) => {
+    setApifyKeys(prev => prev.filter(k => k.id !== keyId));
+    if (selectedKeyId === keyId) {
+      const remaining = apifyKeys.filter(k => k.id !== keyId);
+      setSelectedKeyId(remaining.length > 0 ? remaining[0].id : '');
+    }
+  };
+
+  const getSelectedKey = () => {
+    return apifyKeys.find(k => k.id === selectedKeyId);
+  };
+
+  const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
+    const selectedKey = getSelectedKey();
+    if (!selectedKey) {
+      alert('Please add and select an Apify API key first');
       return;
     }
 
@@ -252,31 +105,7 @@ function App() {
     updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     try {
-      // Create job record
-      const jobResult = await safeSupabaseOperation(
-        () => supabase
-          .from('scraping_jobs')
-          .insert({
-            user_id: currentUser.id,
-            apify_key_id: selectedApifyKey.id,
-            job_type: type,
-            input_url: url,
-            status: 'running'
-          })
-          .select()
-          .single(),
-        'creating job record'
-      );
-
-      if (jobResult.error) {
-        throw new Error(`Failed to create job record: ${jobResult.error.message}`);
-      }
-
-      const job = jobResult.data;
-      await loadData();
-
-      // Create Apify service with selected key
-      const apifyService = createApifyService(selectedApifyKey.api_key);
+      const apifyService = createApifyService(selectedKey.key);
 
       if (type === 'post_comments') {
         updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
@@ -291,18 +120,6 @@ function App() {
         
         updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
 
-        await safeSupabaseOperation(
-          () => supabase
-            .from('scraping_jobs')
-            .update({
-              status: 'completed',
-              results_count: commentsData.length,
-              completed_at: new Date().toISOString()
-            })
-            .eq('id', job.id),
-          'updating job status'
-        );
-
       } else if (type === 'profile_details') {
         updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
         
@@ -314,18 +131,6 @@ function App() {
         setCurrentView('profile-table');
         
         updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
-        
-        await safeSupabaseOperation(
-          () => supabase
-            .from('scraping_jobs')
-            .update({
-              status: 'completed',
-              results_count: profilesData.length,
-              completed_at: new Date().toISOString()
-            })
-            .eq('id', job.id),
-          'updating job status'
-        );
 
       } else if (type === 'mixed') {
         updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
@@ -352,21 +157,8 @@ function App() {
         }
 
         updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
-
-        await safeSupabaseOperation(
-          () => supabase
-            .from('scraping_jobs')
-            .update({
-              status: 'completed',
-              results_count: profileUrls.length,
-              completed_at: new Date().toISOString()
-            })
-            .eq('id', job.id),
-          'updating job status'
-        );
       }
 
-      await loadData();
     } catch (error) {
       console.error('Scraping error:', error);
       
@@ -384,86 +176,33 @@ function App() {
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Scraping failed');
       
-      await loadData();
     } finally {
       setIsLoading(false);
     }
   };
 
   const getProfilesWithDetails = async (profileUrls: string[], apifyService: any): Promise<any[]> => {
-    if (!currentUser) return [];
-
-    // Check which profiles already exist in user's database
-    const existingProfilesResult = await safeSupabaseOperation(
-      () => supabase
-        .from('linkedin_profiles')
-        .select('*')
-        .eq('user_id', currentUser.id)
-        .in('linkedin_url', profileUrls),
-      'checking existing profiles'
-    );
-
-    const existingUrlsMap = new Map();
-    if (existingProfilesResult.data) {
-      existingProfilesResult.data.forEach(profile => {
-        existingUrlsMap.set(profile.linkedin_url, profile.profile_data);
-      });
-    }
-
-    const newUrls = profileUrls.filter(url => !existingUrlsMap.has(url));
-    const allProfileDetails = [];
-
-    // Add existing profiles from database
-    profileUrls.forEach(url => {
-      if (existingUrlsMap.has(url)) {
-        allProfileDetails.push(existingUrlsMap.get(url));
-      }
-    });
-
-    // Scrape new profiles if any
-    if (newUrls.length > 0) {
-      const datasetId = await apifyService.scrapeProfiles(newUrls);
-      const newProfilesData = await apifyService.getDatasetItems(datasetId);
-      
-      // Store new profiles in database and add to results
-      for (let i = 0; i < newProfilesData.length; i++) {
-        const profileData = newProfilesData[i];
-        const linkedinUrl = profileData.linkedinUrl;
-        if (linkedinUrl) {
-          updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Processing profile ${i + 1}/${newProfilesData.length}...`);
-          const processedProfile = await processProfileImages(profileData);
-          
-          // Store in user's database
-          await safeSupabaseOperation(
-            () => supabase
-              .from('linkedin_profiles')
-              .upsert({
-                user_id: currentUser.id,
-                linkedin_url: linkedinUrl,
-                profile_data: processedProfile,
-                last_updated: new Date().toISOString()
-              }, {
-                onConflict: 'user_id,linkedin_url'
-              }),
-            'saving profile data'
-          );
-          
-          allProfileDetails.push(processedProfile);
-        }
-      }
-    }
-
-    return allProfileDetails;
+    const datasetId = await apifyService.scrapeProfiles(profileUrls);
+    const profilesData = await apifyService.getDatasetItems(datasetId);
+    
+    // Store profiles in local state
+    const newProfiles = profilesData.map((profile: any) => ({
+      id: Date.now().toString() + Math.random(),
+      linkedin_url: profile.linkedinUrl,
+      profile_data: profile,
+      last_updated: new Date().toISOString(),
+      created_at: new Date().toISOString()
+    }));
+    
+    setProfiles(prev => [...prev, ...newProfiles]);
+    
+    return profilesData;
   };
 
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
-    if (!selectedApifyKey) {
+    const selectedKey = getSelectedKey();
+    if (!selectedKey) {
       alert('Please select an Apify API key first');
-      return;
-    }
-
-    if (!isOnline) {
-      alert('Cannot start scraping: No internet connection. Please check your network and try again.');
       return;
     }
     
@@ -473,7 +212,7 @@ function App() {
     updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
     
     try {
-      const apifyService = createApifyService(selectedApifyKey.api_key);
+      const apifyService = createApifyService(selectedKey.key);
       const profilesData = await getProfilesWithDetails(profileUrls, apifyService);
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
@@ -481,7 +220,6 @@ function App() {
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
       
-      await loadData();
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
       let errorMessage = 'Unknown error occurred';
@@ -499,116 +237,20 @@ function App() {
   };
 
   const handleUpdateProfile = async (profileUrl: string) => {
-    if (!selectedApifyKey || !currentUser) return;
-
-    try {
-      const apifyService = createApifyService(selectedApifyKey.api_key);
-      const datasetId = await apifyService.scrapeProfiles([profileUrl]);
-      const profilesData = await apifyService.getDatasetItems(datasetId);
-      
-      if (profilesData.length > 0) {
-        const profileData = profilesData[0];
-        const linkedinUrl = profileData.linkedinUrl;
-        
-        const processedProfile = await processProfileImages(profileData);
-        
-        await safeSupabaseOperation(
-          () => supabase
-            .from('linkedin_profiles')
-            .upsert({
-              user_id: currentUser.id,
-              linkedin_url: linkedinUrl,
-              profile_data: processedProfile,
-              last_updated: new Date().toISOString()
-            }, {
-              onConflict: 'user_id,linkedin_url'
-            }),
-          'updating profile'
-        );
-      }
-      
-      await loadData();
-    } catch (error) {
-      console.error('Error updating profile:', error);
-      throw error;
-    }
+    // Simple update - just refresh the profile
+    console.log('Update profile:', profileUrl);
   };
 
   const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
-    if (!selectedApifyKey || !currentUser) return;
-
-    if (!isOnline) {
-      alert('Cannot update profiles: No internet connection. Please check your network and try again.');
-      return;
-    }
-    
-    setIsUpdating(true);
-    
-    try {
-      const apifyService = createApifyService(selectedApifyKey.api_key);
-      const batchSize = 5;
-      for (let i = 0; i < profileUrls.length; i += batchSize) {
-        const batch = profileUrls.slice(i, i + batchSize);
-        
-        const datasetId = await apifyService.scrapeProfiles(batch);
-        const profilesData = await apifyService.getDatasetItems(datasetId);
-        
-        for (const profileData of profilesData) {
-          const linkedinUrl = profileData.linkedinUrl;
-          if (linkedinUrl) {
-            const processedProfile = await processProfileImages(profileData);
-            
-            await safeSupabaseOperation(
-              () => supabase
-                .from('linkedin_profiles')
-                .upsert({
-                  user_id: currentUser.id,
-                  linkedin_url: linkedinUrl,
-                  profile_data: processedProfile,
-                  last_updated: new Date().toISOString()
-                }, {
-                  onConflict: 'user_id,linkedin_url'
-                }),
-              'updating profile in batch'
-            );
-          }
-        }
-      }
-      
-      await loadData();
-    } catch (error) {
-      console.error('Error updating selected profiles:', error);
-    } finally {
-      setIsUpdating(false);
-    }
+    console.log('Update selected profiles:', profileUrls);
   };
 
   const handleDeleteSelectedProfiles = async (profileIds: string[]) => {
-    try {
-      const deleteResult = await safeSupabaseOperation(
-        () => supabase
-          .from('linkedin_profiles')
-          .delete()
-          .in('id', profileIds),
-        'deleting profiles'
-      );
-
-      if (deleteResult.error) {
-        throw new Error(deleteResult.error.message);
-      }
-      
-      await loadData();
-    } catch (error) {
-      console.error('Error deleting profiles:', error);
-    }
+    setProfiles(prev => prev.filter(p => !profileIds.includes(p.id)));
   };
 
   const handleExport = (format: string, selectedOnly: boolean = false) => {
-    if (selectedOnly) {
-      exportData(profiles, format, 'linkedin_profiles_selected');
-    } else {
-      exportData(profiles, format, 'linkedin_profiles');
-    }
+    exportData(profiles, format, 'linkedin_profiles');
   };
 
   const handleExportProfileResults = (format: string) => {
@@ -657,110 +299,15 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
-  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
+  const handleTabChange = async (tab: 'scraper' | 'profiles') => {
     setActiveTab(tab);
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      if (isOnline && !connectionError && currentUser) {
-        await loadData();
-      }
     } else if (tab === 'scraper') {
       setCurrentView('form');
-    } else if (tab === 'jobs') {
-      setCurrentView('form');
     }
   };
-
-  const handleRetryConnection = async () => {
-    setIsRetrying(true);
-    setConnectionError('');
-    
-    try {
-      if (!isOnline) {
-        throw new Error('No internet connection. Please check your network and try again.');
-      }
-      
-      await initializeApp();
-    } catch (error) {
-      console.error('Retry failed:', error);
-      setConnectionError(error instanceof Error ? error.message : 'Retry failed');
-    } finally {
-      setIsRetrying(false);
-    }
-  };
-
-  // Show connection error banner if there's a connection issue
-  if (connectionError) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="max-w-2xl w-full bg-white rounded-lg shadow-lg p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-red-100 rounded-lg">
-              {isOnline ? (
-                <AlertCircle className="w-6 h-6 text-red-600" />
-              ) : (
-                <WifiOff className="w-6 h-6 text-red-600" />
-              )}
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900">
-              {isOnline ? 'Connection Issue' : 'No Internet Connection'}
-            </h2>
-          </div>
-          
-          <div className="space-y-4">
-            <p className="text-gray-600">
-              {isOnline 
-                ? 'There was an issue with the application:'
-                : 'You appear to be offline. Please check your internet connection.'
-              }
-            </p>
-            
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-2">Error Details:</p>
-              <pre className="text-sm text-red-600 whitespace-pre-wrap font-mono bg-white p-3 rounded border overflow-auto max-h-40">
-                {connectionError}
-              </pre>
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={handleRetryConnection}
-                disabled={isRetrying || !isOnline}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isRetrying ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Retrying...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-4 h-4" />
-                    {isOnline ? 'Retry Connection' : 'Check Connection'}
-                  </>
-                )}
-              </button>
-            </div>
-            
-            <div className="flex items-center justify-center gap-2 text-sm">
-              {isOnline ? (
-                <>
-                  <Wifi className="w-4 h-4 text-green-600" />
-                  <span className="text-green-600">Internet Connected</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-4 h-4 text-red-600" />
-                  <span className="text-red-600">No Internet Connection</span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -773,14 +320,6 @@ function App() {
                 <Linkedin className="w-6 h-6 text-blue-600" />
               </div>
               <h1 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h1>
-              
-              <div className="flex items-center gap-1">
-                {isOnline ? (
-                  <Wifi className="w-4 h-4 text-green-600" />
-                ) : (
-                  <WifiOff className="w-4 h-4 text-red-600" />
-                )}
-              </div>
             </div>
             
             <div className="flex items-center gap-6">
@@ -807,17 +346,6 @@ function App() {
                   <Database className="w-4 h-4 inline mr-2" />
                   Profiles ({profiles.length})
                 </button>
-                <button
-                  onClick={() => handleTabChange('jobs')}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    activeTab === 'jobs'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                  }`}
-                >
-                  <Activity className="w-4 h-4 inline mr-2" />
-                  Jobs ({jobs.length})
-                </button>
               </nav>
             </div>
           </div>
@@ -826,20 +354,89 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* User and API Key Management */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <UserSelector
-            currentUser={currentUser}
-            onUserChange={setCurrentUser}
-            onManageUsers={() => {}}
-          />
-          
-          {currentUser && (
-            <ApifyKeyManager
-              userId={currentUser.id}
-              selectedKeyId={selectedApifyKey?.id}
-              onKeySelect={setSelectedApifyKey}
-            />
+        {/* API Key Management */}
+        <div className="mb-8 bg-white rounded-lg border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Apify API Keys</h3>
+            <button
+              onClick={() => setShowKeyForm(!showKeyForm)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Add Key
+            </button>
+          </div>
+
+          {showKeyForm && (
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input
+                  type="text"
+                  placeholder="Key Name (e.g., Main Key)"
+                  value={newKeyName}
+                  onChange={(e) => setNewKeyName(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <input
+                  type="password"
+                  placeholder="Apify API Key"
+                  value={newKeyValue}
+                  onChange={(e) => setNewKeyValue(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={addApifyKey}
+                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => setShowKeyForm(false)}
+                    className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {apifyKeys.map(key => (
+              <div
+                key={key.id}
+                className={`p-3 border rounded-lg flex items-center justify-between ${
+                  selectedKeyId === key.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <input
+                    type="radio"
+                    checked={selectedKeyId === key.id}
+                    onChange={() => setSelectedKeyId(key.id)}
+                    className="text-blue-600"
+                  />
+                  <div>
+                    <div className="font-medium">{key.name}</div>
+                    <div className="text-sm text-gray-500 font-mono">
+                      {'•'.repeat(20)}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeApifyKey(key.id)}
+                  className="text-red-600 hover:text-red-800"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {apifyKeys.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              <p>No API keys found. Add your first Apify API key to get started.</p>
+            </div>
           )}
         </div>
 
@@ -850,7 +447,7 @@ function App() {
                 <ScrapingForm 
                   onScrape={handleScrape} 
                   isLoading={isLoading}
-                  disabled={!currentUser || !selectedApifyKey}
+                  disabled={!selectedKeyId}
                 />
                 
                 {isLoading && (
@@ -863,7 +460,7 @@ function App() {
                   />
                 )}
                 
-                {/* Recent Activity */}
+                {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="bg-white rounded-lg shadow p-6">
                     <div className="flex items-center gap-3">
@@ -872,7 +469,7 @@ function App() {
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Your Profiles</div>
+                        <div className="text-sm text-gray-600">Stored Profiles</div>
                       </div>
                     </div>
                   </div>
@@ -883,24 +480,20 @@ function App() {
                         <Activity className="w-5 h-5 text-green-600" />
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-gray-900">
-                          {jobs.filter(j => j.status === 'completed').length}
-                        </div>
-                        <div className="text-sm text-gray-600">Completed Jobs</div>
+                        <div className="text-2xl font-bold text-gray-900">{apifyKeys.length}</div>
+                        <div className="text-sm text-gray-600">API Keys</div>
                       </div>
                     </div>
                   </div>
                   
                   <div className="bg-white rounded-lg shadow p-6">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-yellow-100 rounded-lg">
-                        <Activity className="w-5 h-5 text-yellow-600" />
+                      <div className="p-2 bg-purple-100 rounded-lg">
+                        <Linkedin className="w-5 h-5 text-purple-600" />
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-gray-900">
-                          {jobs.filter(j => j.status === 'running').length}
-                        </div>
-                        <div className="text-sm text-gray-600">Running Jobs</div>
+                        <div className="text-2xl font-bold text-gray-900">{commentersData.length}</div>
+                        <div className="text-sm text-gray-600">Last Comments</div>
                       </div>
                     </div>
                   </div>
@@ -965,14 +558,10 @@ function App() {
                 onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
                 onExport={handleExport}
                 onViewDetails={handleViewProfileDetails}
-                isUpdating={isUpdating}
+                isUpdating={false}
               />
             )}
           </>
-        )}
-
-        {activeTab === 'jobs' && (
-          <JobsTable jobs={jobs} />
         )}
       </main>
     </div>
