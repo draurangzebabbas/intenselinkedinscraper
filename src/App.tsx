@@ -1,14 +1,31 @@
 import React, { useState, useEffect } from 'react';
+import { Auth } from './components/Auth';
 import { ScrapingForm } from './components/ScrapingForm';
 import { DataTable } from './components/DataTable';
 import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
 import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
+import { ApifyKeyManager } from './components/ApifyKeyManager';
+import { UserMenu } from './components/UserMenu';
+import { UserProfile } from './components/UserProfile';
+import { JobsTable } from './components/JobsTable';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
-import { supabase } from './lib/supabase';
-import { Linkedin, Database, Activity } from 'lucide-react';
+import { 
+  supabase, 
+  getCurrentUser, 
+  getUserProfile, 
+  checkProfileExists, 
+  upsertProfile,
+  getUserProfiles,
+  getAllProfiles,
+  type User,
+  type ApifyKey,
+  type LinkedInProfile,
+  type ScrapingJob
+} from './lib/supabase';
+import { Linkedin, Database, Activity, Key, Clock } from 'lucide-react';
 
 interface CommentData {
   type: string;
@@ -25,99 +42,101 @@ interface CommentData {
   };
 }
 
-interface ApifyKey {
-  id: string;
-  name: string;
-  key: string;
-}
-
 function App() {
-  // Simple state management - no complex database operations
-  const [profiles, setProfiles] = useState<any[]>([]);
+  // Auth state
+  const [user, setUser] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // App state
+  const [profiles, setProfiles] = useState<LinkedInProfile[]>([]);
   const [commentersData, setCommentersData] = useState<CommentData[]>([]);
   const [profileDetails, setProfileDetails] = useState<any[]>([]);
   const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
+  const [scrapingJobs, setScrapingJobs] = useState<ScrapingJob[]>([]);
+  
+  // UI state
+  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   
-  // Database-integrated API key management
-  const [apifyKeys, setApifyKeys] = useState<ApifyKey[]>([]);
+  // Scraping state
+  const [isScraping, setIsScraping] = useState(false);
   const [selectedKeyId, setSelectedKeyId] = useState<string>('');
-  const [showKeyForm, setShowKeyForm] = useState(false);
-  const [newKeyName, setNewKeyName] = useState('');
-  const [newKeyValue, setNewKeyValue] = useState('');
-  const [isLoadingKeys, setIsLoadingKeys] = useState(true);
-  
-  // Loading progress states
   const [loadingStage, setLoadingStage] = useState<'starting' | 'scraping_comments' | 'extracting_profiles' | 'scraping_profiles' | 'saving_data' | 'completed' | 'error'>('starting');
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState('');
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Load API keys from database and environment on component mount
+  // Initialize auth listener
   useEffect(() => {
-    loadApifyKeys();
+    const initAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        setUser(session.user);
+        const profile = await getUserProfile(session.user.id);
+        setUserProfile(profile);
+        if (profile) {
+          await loadUserData(profile.id);
+        }
+      }
+      
+      setIsLoading(false);
+    };
+
+    initAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser(session.user);
+        const profile = await getUserProfile(session.user.id);
+        setUserProfile(profile);
+        if (profile) {
+          await loadUserData(profile.id);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setUserProfile(null);
+        setProfiles([]);
+        setScrapingJobs([]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const loadApifyKeys = async () => {
-    setIsLoadingKeys(true);
+  const loadUserData = async (userId: string) => {
     try {
-      // First, try to load from environment variable
-      const envKey = import.meta.env.VITE_APIFY_API_KEY;
-      const keys: ApifyKey[] = [];
+      // Load user's profiles and all profiles for viewing
+      const [userProfiles, allProfiles, jobs] = await Promise.all([
+        getUserProfiles(userId),
+        getAllProfiles(),
+        loadScrapingJobs(userId)
+      ]);
       
-      if (envKey) {
-        keys.push({
-          id: 'env-key',
-          name: 'Environment Key',
-          key: envKey
-        });
-      }
-
-      // Then load from database (if we have user authentication)
-      try {
-        const { data: dbKeys, error } = await supabase
-          .from('apify_keys')
-          .select('id, key_name, api_key, is_active')
-          .eq('is_active', true);
-
-        if (!error && dbKeys) {
-          const formattedDbKeys = dbKeys.map(key => ({
-            id: key.id,
-            name: key.key_name,
-            key: key.api_key
-          }));
-          keys.push(...formattedDbKeys);
-        }
-      } catch (dbError) {
-        console.log('Database not available, using local storage fallback');
-        // Fallback to localStorage for keys
-        const storedKeys = localStorage.getItem('apify_keys');
-        if (storedKeys) {
-          try {
-            const parsedKeys = JSON.parse(storedKeys);
-            keys.push(...parsedKeys);
-          } catch (parseError) {
-            console.error('Error parsing stored keys:', parseError);
-          }
-        }
-      }
-
-      setApifyKeys(keys);
-      
-      // Auto-select the first available key
-      if (keys.length > 0 && !selectedKeyId) {
-        setSelectedKeyId(keys[0].id);
-      }
-      
+      setProfiles(allProfiles);
+      setScrapingJobs(jobs);
     } catch (error) {
-      console.error('Error loading API keys:', error);
-    } finally {
-      setIsLoadingKeys(false);
+      console.error('Error loading user data:', error);
     }
+  };
+
+  const loadScrapingJobs = async (userId: string): Promise<ScrapingJob[]> => {
+    const { data, error } = await supabase
+      .from('scraping_jobs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    if (error) {
+      console.error('Error loading scraping jobs:', error);
+      return [];
+    }
+    
+    return data || [];
   };
 
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
@@ -126,106 +145,89 @@ function App() {
     setLoadingMessage(message);
   };
 
-  const addApifyKey = async () => {
-    if (!newKeyName.trim() || !newKeyValue.trim()) return;
+  const handleKeySelect = (key: ApifyKey) => {
+    setSelectedKeyId(key.id);
+  };
+
+  const createScrapingJob = async (jobType: ScrapingJob['job_type'], inputUrl: string): Promise<string> => {
+    if (!userProfile) throw new Error('User not authenticated');
     
-    const newKey: ApifyKey = {
-      id: Date.now().toString(),
-      name: newKeyName.trim(),
-      key: newKeyValue.trim()
+    const { data, error } = await supabase
+      .from('scraping_jobs')
+      .insert({
+        user_id: userProfile.id,
+        apify_key_id: selectedKeyId || null,
+        job_type: jobType,
+        input_url: inputUrl,
+        status: 'running'
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // Refresh jobs list
+    const updatedJobs = await loadScrapingJobs(userProfile.id);
+    setScrapingJobs(updatedJobs);
+    
+    return data.id;
+  };
+
+  const updateScrapingJob = async (jobId: string, status: ScrapingJob['status'], resultsCount?: number, errorMessage?: string) => {
+    if (!userProfile) return;
+    
+    const updateData: any = {
+      status,
+      ...(resultsCount !== undefined && { results_count: resultsCount }),
+      ...(errorMessage && { error_message: errorMessage }),
+      ...(status === 'completed' && { completed_at: new Date().toISOString() })
     };
+
+    await supabase
+      .from('scraping_jobs')
+      .update(updateData)
+      .eq('id', jobId);
     
-    try {
-      // Try to save to database first
-      const { error } = await supabase
-        .from('apify_keys')
-        .insert({
-          key_name: newKey.name,
-          api_key: newKey.key,
-          is_active: true
-        });
-
-      if (error) {
-        console.log('Database not available, saving to localStorage');
-        // Fallback to localStorage
-        const updatedKeys = [...apifyKeys, newKey];
-        localStorage.setItem('apify_keys', JSON.stringify(updatedKeys));
-      }
-    } catch (dbError) {
-      console.log('Database not available, saving to localStorage');
-      // Fallback to localStorage
-      const updatedKeys = [...apifyKeys, newKey];
-      localStorage.setItem('apify_keys', JSON.stringify(updatedKeys));
-    }
-    
-    setApifyKeys(prev => [...prev, newKey]);
-    if (!selectedKeyId) {
-      setSelectedKeyId(newKey.id);
-    }
-    
-    setNewKeyName('');
-    setNewKeyValue('');
-    setShowKeyForm(false);
-  };
-
-  const removeApifyKey = async (keyId: string) => {
-    // Don't allow removing the environment key
-    if (keyId === 'env-key') {
-      alert('Cannot remove the environment API key');
-      return;
-    }
-
-    try {
-      // Try to remove from database
-      const { error } = await supabase
-        .from('apify_keys')
-        .delete()
-        .eq('id', keyId);
-
-      if (error) {
-        console.log('Database not available, removing from localStorage');
-      }
-    } catch (dbError) {
-      console.log('Database not available, removing from localStorage');
-    }
-
-    const updatedKeys = apifyKeys.filter(k => k.id !== keyId);
-    setApifyKeys(updatedKeys);
-    
-    // Update localStorage
-    const localKeys = updatedKeys.filter(k => k.id !== 'env-key');
-    localStorage.setItem('apify_keys', JSON.stringify(localKeys));
-    
-    if (selectedKeyId === keyId) {
-      const remaining = updatedKeys;
-      setSelectedKeyId(remaining.length > 0 ? remaining[0].id : '');
-    }
-  };
-
-  const getSelectedKey = () => {
-    return apifyKeys.find(k => k.id === selectedKeyId);
+    // Refresh jobs list
+    const updatedJobs = await loadScrapingJobs(userProfile.id);
+    setScrapingJobs(updatedJobs);
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
-    const selectedKey = getSelectedKey();
-    if (!selectedKey) {
-      alert('Please add and select an Apify API key first');
+    if (!userProfile) {
+      alert('Please sign in to start scraping');
       return;
     }
 
-    // Validate the API key format
-    if (!selectedKey.key || selectedKey.key.length < 10) {
-      alert('Invalid API key. Please check your Apify API key and try again.');
+    if (!selectedKeyId) {
+      alert('Please select an Apify API key first');
       return;
     }
 
-    setIsLoading(true);
+    // Get the selected API key
+    const { data: keyData, error: keyError } = await supabase
+      .from('apify_keys')
+      .select('api_key')
+      .eq('id', selectedKeyId)
+      .single();
+
+    if (keyError || !keyData) {
+      alert('Invalid API key selected');
+      return;
+    }
+
+    setIsScraping(true);
     setScrapingType(type);
     setLoadingError('');
     updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
+    let jobId: string | null = null;
+    
     try {
-      const apifyService = createApifyService(selectedKey.key);
+      // Create scraping job
+      jobId = await createScrapingJob(type, url);
+      
+      const apifyService = createApifyService(keyData.api_key);
 
       if (type === 'post_comments') {
         updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
@@ -239,11 +241,13 @@ function App() {
         setCurrentView('comments');
         
         updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
+        await updateScrapingJob(jobId, 'completed', commentsData.length);
 
       } else if (type === 'profile_details') {
-        updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
+        updateLoadingProgress('scraping_profiles', 25, 'Checking existing profiles in database...');
         
-        const profilesData = await getProfilesWithDetails([url], apifyService);
+        const profileUrls = Array.isArray(url) ? url : [url];
+        const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
@@ -251,6 +255,7 @@ function App() {
         setCurrentView('profile-table');
         
         updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
+        await updateScrapingJob(jobId, 'completed', profilesData.length);
 
       } else if (type === 'mixed') {
         updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
@@ -266,9 +271,9 @@ function App() {
           .slice(0, 50);
         
         if (profileUrls.length > 0) {
-          updateLoadingProgress('scraping_profiles', 60, `Scraping ${profileUrls.length} profile details...`);
+          updateLoadingProgress('scraping_profiles', 60, `Checking and scraping ${profileUrls.length} profiles...`);
           
-          const profilesData = await getProfilesWithDetails(profileUrls, apifyService);
+          const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
           
           updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
@@ -277,7 +282,12 @@ function App() {
         }
 
         updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
+        await updateScrapingJob(jobId, 'completed', profileUrls.length);
       }
+
+      // Refresh profiles list
+      const updatedProfiles = await getAllProfiles();
+      setProfiles(updatedProfiles);
 
     } catch (error) {
       console.error('Scraping error:', error);
@@ -285,96 +295,134 @@ function App() {
       let errorMessage = 'Unknown error occurred';
       if (error instanceof Error) {
         errorMessage = error.message;
-        
-        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
-          errorMessage = 'Network connection failed. Please check your internet connection and try again.';
-        } else if (errorMessage.includes('timeout')) {
-          errorMessage = 'Request timed out. The service may be slow to respond. Please try again.';
-        } else if (errorMessage.includes('API key') || errorMessage.includes('authentication') || errorMessage.includes('unauthorized')) {
-          errorMessage = 'Invalid or expired API key. Please check your Apify API key and try again.';
-        } else if (errorMessage.includes('Cannot reach Apify API')) {
-          errorMessage = 'Cannot connect to Apify API. Please verify your API key is correct and try again.';
-        }
       }
       
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Scraping failed');
       
+      if (jobId) {
+        await updateScrapingJob(jobId, 'failed', undefined, errorMessage);
+      }
+      
     } finally {
-      setIsLoading(false);
+      setIsScraping(false);
     }
   };
 
-  const getProfilesWithDetails = async (profileUrls: string[], apifyService: any): Promise<any[]> => {
-    const datasetId = await apifyService.scrapeProfiles(profileUrls);
-    const profilesData = await apifyService.getDatasetItems(datasetId);
+  const getProfilesWithOptimization = async (profileUrls: string[], apifyService: any, userId: string): Promise<any[]> => {
+    const results: any[] = [];
+    const urlsToScrape: string[] = [];
+    let savedCost = 0;
     
-    return profilesData;
+    updateLoadingProgress('scraping_profiles', 30, 'Checking database for existing profiles...');
+    
+    // Check each URL in database first
+    for (const url of profileUrls) {
+      const existingProfile = await checkProfileExists(url);
+      if (existingProfile) {
+        results.push(existingProfile.profile_data);
+        savedCost++;
+      } else {
+        urlsToScrape.push(url);
+      }
+    }
+    
+    if (urlsToScrape.length > 0) {
+      updateLoadingProgress('scraping_profiles', 50, `Scraping ${urlsToScrape.length} new profiles (saved ${savedCost} API calls)...`);
+      
+      const datasetId = await apifyService.scrapeProfiles(urlsToScrape);
+      const newProfilesData = await apifyService.getDatasetItems(datasetId);
+      
+      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
+      
+      // Save new profiles to database
+      for (const profileData of newProfilesData) {
+        if (profileData.linkedinUrl) {
+          await upsertProfile(userId, profileData.linkedinUrl, profileData);
+          results.push(profileData);
+        }
+      }
+    }
+    
+    updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
+    
+    return results;
   };
 
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
-    const selectedKey = getSelectedKey();
-    if (!selectedKey) {
-      alert('Please select an Apify API key first');
+    if (!userProfile || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const { data: keyData, error: keyError } = await supabase
+      .from('apify_keys')
+      .select('api_key')
+      .eq('id', selectedKeyId)
+      .single();
+
+    if (keyError || !keyData) {
+      alert('Invalid API key selected');
       return;
     }
     
-    setIsLoading(true);
+    setIsScraping(true);
     setScrapingType('profile_details');
     setLoadingError('');
-    updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
+    updateLoadingProgress('scraping_profiles', 25, `Checking and scraping ${profileUrls.length} selected profiles...`);
+    
+    let jobId: string | null = null;
     
     try {
-      const apifyService = createApifyService(selectedKey.key);
-      const profilesData = await getProfilesWithDetails(profileUrls, apifyService);
+      jobId = await createScrapingJob('profile_details', profileUrls.join(','));
+      
+      const apifyService = createApifyService(keyData.api_key);
+      const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
+      
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
       setPreviousView('comments');
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
       
+      await updateScrapingJob(jobId, 'completed', profilesData.length);
+      
+      // Refresh profiles list
+      const updatedProfiles = await getAllProfiles();
+      setProfiles(updatedProfiles);
+      
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
       let errorMessage = 'Unknown error occurred';
       if (error instanceof Error) {
         errorMessage = error.message;
-        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
-          errorMessage = 'Network connection failed. Please check your internet connection and try again.';
-        } else if (errorMessage.includes('API key') || errorMessage.includes('authentication')) {
-          errorMessage = 'Invalid or expired API key. Please check your Apify API key and try again.';
-        }
       }
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
+      
+      if (jobId) {
+        await updateScrapingJob(jobId, 'failed', undefined, errorMessage);
+      }
     } finally {
-      setIsLoading(false);
+      setIsScraping(false);
     }
   };
 
   const handleStoreSelectedProfiles = async (profilesToStore: any[], tags: string[]) => {
+    if (!userProfile) return;
+    
     try {
-      // Remove duplicates based on LinkedIn URL
-      const uniqueProfiles = profilesToStore.filter((profile, index, self) => 
-        index === self.findIndex(p => p.linkedinUrl === profile.linkedinUrl)
-      );
-
-      // Store profiles in local state with tags
-      const newProfiles = uniqueProfiles.map((profile: any) => ({
-        id: Date.now().toString() + Math.random(),
-        linkedin_url: profile.linkedinUrl,
-        profile_data: profile,
-        tags: tags,
-        last_updated: new Date().toISOString(),
-        created_at: new Date().toISOString()
-      }));
+      for (const profile of profilesToStore) {
+        if (profile.linkedinUrl) {
+          await upsertProfile(userProfile.id, profile.linkedinUrl, profile, tags);
+        }
+      }
       
-      // Check for existing profiles and avoid duplicates
-      const existingUrls = new Set(profiles.map(p => p.linkedin_url));
-      const filteredNewProfiles = newProfiles.filter(p => !existingUrls.has(p.linkedin_url));
+      // Refresh profiles list
+      const updatedProfiles = await getAllProfiles();
+      setProfiles(updatedProfiles);
       
-      setProfiles(prev => [...prev, ...filteredNewProfiles]);
-      
-      alert(`Successfully stored ${filteredNewProfiles.length} unique profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
+      alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
       
     } catch (error) {
       console.error('Error storing profiles:', error);
@@ -383,16 +431,89 @@ function App() {
   };
 
   const handleUpdateProfile = async (profileUrl: string) => {
-    // Simple update - just refresh the profile
-    console.log('Update profile:', profileUrl);
+    if (!userProfile || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const { data: keyData, error: keyError } = await supabase
+      .from('apify_keys')
+      .select('api_key')
+      .eq('id', selectedKeyId)
+      .single();
+
+    if (keyError || !keyData) {
+      alert('Invalid API key selected');
+      return;
+    }
+
+    try {
+      const apifyService = createApifyService(keyData.api_key);
+      const profilesData = await getProfilesWithOptimization([profileUrl], apifyService, userProfile.id);
+      
+      if (profilesData.length > 0) {
+        // Refresh profiles list
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+        alert('Profile updated successfully!');
+      }
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      alert('Error updating profile. Please try again.');
+    }
   };
 
   const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
-    console.log('Update selected profiles:', profileUrls);
+    if (!userProfile || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const { data: keyData, error: keyError } = await supabase
+      .from('apify_keys')
+      .select('api_key')
+      .eq('id', selectedKeyId)
+      .single();
+
+    if (keyError || !keyData) {
+      alert('Invalid API key selected');
+      return;
+    }
+
+    try {
+      const apifyService = createApifyService(keyData.api_key);
+      await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
+      
+      // Refresh profiles list
+      const updatedProfiles = await getAllProfiles();
+      setProfiles(updatedProfiles);
+      alert(`Successfully updated ${profileUrls.length} profiles!`);
+    } catch (error) {
+      console.error('Error updating profiles:', error);
+      alert('Error updating profiles. Please try again.');
+    }
   };
 
   const handleDeleteSelectedProfiles = async (profileIds: string[]) => {
-    setProfiles(prev => prev.filter(p => !profileIds.includes(p.id)));
+    if (!userProfile) return;
+    
+    try {
+      const { error } = await supabase
+        .from('linkedin_profiles')
+        .delete()
+        .in('id', profileIds);
+      
+      if (error) throw error;
+      
+      // Refresh profiles list
+      const updatedProfiles = await getAllProfiles();
+      setProfiles(updatedProfiles);
+      
+      alert(`Successfully deleted ${profileIds.length} profiles`);
+    } catch (error) {
+      console.error('Error deleting profiles:', error);
+      alert('Error deleting profiles. Please try again.');
+    }
   };
 
   const handleExport = (format: string, selectedOnly: boolean = false) => {
@@ -445,15 +566,40 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
-  const handleTabChange = async (tab: 'scraper' | 'profiles') => {
+  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
     } else if (tab === 'scraper') {
       setCurrentView('form');
+    } else if (tab === 'jobs') {
+      setCurrentView('form'); // Jobs will be shown in the main content
     }
   };
+
+  const handleOpenProfile = () => {
+    setCurrentView('user-profile');
+  };
+
+  const handleAuthSuccess = () => {
+    // Auth state will be handled by the auth listener
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div className="text-gray-600">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || !userProfile) {
+    return <Auth onAuthSuccess={handleAuthSuccess} />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -492,7 +638,20 @@ function App() {
                   <Database className="w-4 h-4 inline mr-2" />
                   Profiles ({profiles.length})
                 </button>
+                <button
+                  onClick={() => handleTabChange('jobs')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'jobs'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <Clock className="w-4 h-4 inline mr-2" />
+                  Jobs ({scrapingJobs.length})
+                </button>
               </nav>
+              
+              <UserMenu user={user} onOpenProfile={handleOpenProfile} />
             </div>
           </div>
         </div>
@@ -500,231 +659,149 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* API Key Management */}
-        <div className="mb-8 bg-white rounded-lg border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900">Apify API Keys</h3>
-            <button
-              onClick={() => setShowKeyForm(!showKeyForm)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              disabled={isLoadingKeys}
-            >
-              Add Key
-            </button>
-          </div>
-
-          {showKeyForm && (
-            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <input
-                  type="text"
-                  placeholder="Key Name (e.g., Main Key)"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        {currentView === 'user-profile' ? (
+          <UserProfile user={user} onBack={() => setCurrentView('form')} />
+        ) : (
+          <>
+            {/* API Key Management */}
+            {(activeTab === 'scraper' && currentView === 'form') && (
+              <div className="mb-8">
+                <ApifyKeyManager
+                  userId={userProfile.id}
+                  selectedKeyId={selectedKeyId}
+                  onKeySelect={handleKeySelect}
                 />
-                <input
-                  type="password"
-                  placeholder="Apify API Key"
-                  value={newKeyValue}
-                  onChange={(e) => setNewKeyValue(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={addApifyKey}
-                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-                  >
-                    Add
-                  </button>
-                  <button
-                    onClick={() => setShowKeyForm(false)}
-                    className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {isLoadingKeys ? (
-            <div className="text-center py-4">
-              <div className="text-gray-500">Loading API keys...</div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {apifyKeys.map(key => (
-                <div
-                  key={key.id}
-                  className={`p-3 border rounded-lg flex items-center justify-between ${
-                    selectedKeyId === key.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="radio"
-                      checked={selectedKeyId === key.id}
-                      onChange={() => setSelectedKeyId(key.id)}
-                      className="text-blue-600"
+            {activeTab === 'scraper' && (
+              <div className="space-y-8">
+                {currentView === 'form' && (
+                  <>
+                    <ScrapingForm 
+                      onScrape={handleScrape} 
+                      isLoading={isScraping}
+                      disabled={!selectedKeyId}
                     />
-                    <div>
-                      <div className="font-medium">
-                        {key.name}
-                        {key.id === 'env-key' && (
-                          <span className="ml-2 px-2 py-1 text-xs bg-green-100 text-green-800 rounded">
-                            ENV
-                          </span>
-                        )}
+                    
+                    {isScraping && (
+                      <LoadingProgress
+                        type={scrapingType}
+                        stage={loadingStage}
+                        progress={loadingProgress}
+                        message={loadingMessage}
+                        error={loadingError}
+                      />
+                    )}
+                    
+                    {/* Stats */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-blue-100 rounded-lg">
+                            <Database className="w-5 h-5 text-blue-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
+                            <div className="text-sm text-gray-600">Total Profiles</div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-sm text-gray-500 font-mono">
-                        {'•'.repeat(20)}
+                      
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-green-100 rounded-lg">
+                            <Activity className="w-5 h-5 text-green-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{scrapingJobs.filter(j => j.status === 'completed').length}</div>
+                            <div className="text-sm text-gray-600">Completed Jobs</div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-purple-100 rounded-lg">
+                            <Linkedin className="w-5 h-5 text-purple-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{commentersData.length}</div>
+                            <div className="text-sm text-gray-600">Last Comments</div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  {key.id !== 'env-key' && (
-                    <button
-                      onClick={() => removeApifyKey(key.id)}
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                  </>
+                )}
 
-          {apifyKeys.length === 0 && !isLoadingKeys && (
-            <div className="text-center py-8 text-gray-500">
-              <p>No API keys found. Add your first Apify API key to get started.</p>
-              <p className="text-sm mt-2">You can also set VITE_APIFY_API_KEY in your environment variables.</p>
-            </div>
-          )}
-        </div>
-
-        {activeTab === 'scraper' && (
-          <div className="space-y-8">
-            {currentView === 'form' && (
-              <>
-                <ScrapingForm 
-                  onScrape={handleScrape} 
-                  isLoading={isLoading}
-                  disabled={!selectedKeyId || isLoadingKeys}
-                />
-                
-                {isLoading && (
-                  <LoadingProgress
-                    type={scrapingType}
-                    stage={loadingStage}
-                    progress={loadingProgress}
-                    message={loadingMessage}
-                    error={loadingError}
+                {currentView === 'comments' && (
+                  <CommentResults
+                    comments={commentersData}
+                    onScrapeSelectedProfiles={handleScrapeSelectedCommenterProfiles}
+                    isLoading={isScraping}
+                    onBack={handleBackToForm}
+                    loadingStage={loadingStage}
+                    loadingProgress={loadingProgress}
+                    loadingMessage={loadingMessage}
+                    loadingError={loadingError}
                   />
                 )}
-                
-                {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <Database className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Stored Profiles</div>
-                      </div>
+
+                {currentView === 'profile-table' && (
+                  <div className="space-y-6">
+                    <ProfileResultsTable
+                      profiles={profileDetails}
+                      onViewDetails={handleViewProfileDetails}
+                      onExport={handleExportProfileResults}
+                      onStoreSelectedProfiles={handleStoreSelectedProfiles}
+                      showActions={false}
+                      showStoreOption={true}
+                    />
+                    
+                    <div className="flex justify-center">
+                      <button
+                        onClick={handleBackToPrevious}
+                        className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                      >
+                        {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
+                      </button>
                     </div>
                   </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-green-100 rounded-lg">
-                        <Activity className="w-5 h-5 text-green-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{apifyKeys.length}</div>
-                        <div className="text-sm text-gray-600">API Keys</div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-purple-100 rounded-lg">
-                        <Linkedin className="w-5 h-5 text-purple-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{commentersData.length}</div>
-                        <div className="text-sm text-gray-600">Last Comments</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                )}
+
+                {currentView === 'profile-details' && (
+                  <ProfileDetailsDisplay
+                    profiles={profileDetails}
+                    onBack={handleBackToPrevious}
+                  />
+                )}
+              </div>
+            )}
+
+            {activeTab === 'profiles' && (
+              <>
+                {currentView === 'single-profile-details' ? (
+                  <ProfileDetailsDisplay
+                    profiles={selectedProfileForDetails ? [selectedProfileForDetails.profile_data] : []}
+                    onBack={handleBackToProfilesList}
+                  />
+                ) : (
+                  <DataTable
+                    profiles={profiles}
+                    onUpdateProfile={handleUpdateProfile}
+                    onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+                    onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
+                    onExport={handleExport}
+                    onViewDetails={(profile) => handleViewProfileDetails(profile)}
+                    isUpdating={false}
+                  />
+                )}
               </>
             )}
 
-            {currentView === 'comments' && (
-              <CommentResults
-                comments={commentersData}
-                onScrapeSelectedProfiles={handleScrapeSelectedCommenterProfiles}
-                isLoading={isLoading}
-                onBack={handleBackToForm}
-                loadingStage={loadingStage}
-                loadingProgress={loadingProgress}
-                loadingMessage={loadingMessage}
-                loadingError={loadingError}
-              />
-            )}
-
-            {currentView === 'profile-table' && (
-              <div className="space-y-6">
-                <ProfileResultsTable
-                  profiles={profileDetails}
-                  onViewDetails={handleViewProfileDetails}
-                  onExport={handleExportProfileResults}
-                  onStoreSelectedProfiles={handleStoreSelectedProfiles}
-                  showActions={false}
-                  showStoreOption={true}
-                />
-                
-                <div className="flex justify-center">
-                  <button
-                    onClick={handleBackToPrevious}
-                    className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {currentView === 'profile-details' && (
-              <ProfileDetailsDisplay
-                profiles={profileDetails}
-                onBack={handleBackToPrevious}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === 'profiles' && (
-          <>
-            {currentView === 'single-profile-details' ? (
-              <ProfileDetailsDisplay
-                profiles={selectedProfileForDetails ? [selectedProfileForDetails] : []}
-                onBack={handleBackToProfilesList}
-              />
-            ) : (
-              <DataTable
-                profiles={profiles}
-                onUpdateProfile={handleUpdateProfile}
-                onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
-                onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
-                onExport={handleExport}
-                onViewDetails={handleViewProfileDetails}
-                isUpdating={false}
-              />
+            {activeTab === 'jobs' && (
+              <JobsTable jobs={scrapingJobs} />
             )}
           </>
         )}
