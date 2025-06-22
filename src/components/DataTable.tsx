@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   X, Download, RefreshCw, Eye, EyeOff, Filter, Calendar, ExternalLink,
   CheckSquare, Square, Trash2, Users, Upload, MapPin, Building, Briefcase,
-  GraduationCap, Award, Mail, Phone, Globe
+  GraduationCap, Award, Mail, Phone, Globe, ChevronDown
 } from 'lucide-react';
 
 interface Profile {
@@ -39,6 +39,21 @@ export const DataTable: React.FC<DataTableProps> = ({
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [updatingProfiles, setUpdatingProfiles] = useState<Set<string>>(new Set());
+  
+  // New filtering options
+  const [dataFilters, setDataFilters] = useState({
+    hasEmail: false,
+    hasPhone: false,
+    hasWebsite: false,
+    hasSkills: false,
+    hasExperience: false,
+    hasEducation: false,
+    hasCertifications: false,
+    hasAbout: false,
+    hasLocation: false,
+    hasCurrentJob: false
+  });
+  const [showDataFilters, setShowDataFilters] = useState(false);
 
   const allColumns = [
     { key: 'select', label: 'Select' },
@@ -63,14 +78,37 @@ export const DataTable: React.FC<DataTableProps> = ({
   ];
 
   const filteredProfiles = useMemo(() => {
-    if (!filter) return profiles;
+    let filtered = profiles;
     
-    return profiles.filter(profile => {
+    // Apply text filter
+    if (filter) {
+      filtered = filtered.filter(profile => {
+        const data = profile.profile_data || {};
+        const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''} ${data.companyName || ''}`.toLowerCase();
+        return searchText.includes(filter.toLowerCase());
+      });
+    }
+    
+    // Apply data presence filters
+    filtered = filtered.filter(profile => {
       const data = profile.profile_data || {};
-      const searchText = `${data.fullName || data.firstName || ''} ${data.lastName || ''} ${data.headline || ''} ${data.addressWithCountry || ''} ${data.companyName || ''}`.toLowerCase();
-      return searchText.includes(filter.toLowerCase());
+      
+      if (dataFilters.hasEmail && !data.email) return false;
+      if (dataFilters.hasPhone && !data.mobileNumber) return false;
+      if (dataFilters.hasWebsite && !data.creatorWebsite?.link) return false;
+      if (dataFilters.hasSkills && (!data.skills || data.skills.length === 0)) return false;
+      if (dataFilters.hasExperience && (!data.experiences || data.experiences.length === 0)) return false;
+      if (dataFilters.hasEducation && (!data.educations || data.educations.length === 0)) return false;
+      if (dataFilters.hasCertifications && (!data.licenseAndCertificates || data.licenseAndCertificates.length === 0)) return false;
+      if (dataFilters.hasAbout && !data.about) return false;
+      if (dataFilters.hasLocation && !data.addressWithCountry && !data.addressCountryOnly && !data.addressWithoutCountry) return false;
+      if (dataFilters.hasCurrentJob && !data.jobTitle && !data.companyName) return false;
+      
+      return true;
     });
-  }, [profiles, filter]);
+    
+    return filtered;
+  }, [profiles, filter, dataFilters]);
 
   const toggleColumn = (columnKey: string) => {
     if (columnKey === 'select' || columnKey === 'actions') return; // Don't allow hiding these
@@ -82,6 +120,32 @@ export const DataTable: React.FC<DataTableProps> = ({
       newVisible.add(columnKey);
     }
     setVisibleColumns(newVisible);
+  };
+
+  const toggleDataFilter = (filterKey: keyof typeof dataFilters) => {
+    setDataFilters(prev => ({
+      ...prev,
+      [filterKey]: !prev[filterKey]
+    }));
+  };
+
+  const clearAllDataFilters = () => {
+    setDataFilters({
+      hasEmail: false,
+      hasPhone: false,
+      hasWebsite: false,
+      hasSkills: false,
+      hasExperience: false,
+      hasEducation: false,
+      hasCertifications: false,
+      hasAbout: false,
+      hasLocation: false,
+      hasCurrentJob: false
+    });
+  };
+
+  const getActiveFiltersCount = () => {
+    return Object.values(dataFilters).filter(Boolean).length;
   };
 
   const toggleProfileSelection = (profileId: string) => {
@@ -428,11 +492,11 @@ export const DataTable: React.FC<DataTableProps> = ({
             
             <button
               onClick={() => handleSingleProfileUpdate(profile.linkedin_url || data.linkedinUrl, profile.id)}
-              disabled={isProfileUpdating}
+              disabled={isUpdating}
               className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              <RefreshCw className={`w-4 h-4 ${isProfileUpdating ? 'animate-spin' : ''}`} />
-              {isProfileUpdating ? 'Updating...' : 'Update'}
+              <RefreshCw className={`w-4 h-4 ${isUpdating ? 'animate-spin' : ''}`} />
+              {isUpdating ? 'Updating...' : 'Update'}
             </button>
           </div>
         );
@@ -453,6 +517,11 @@ export const DataTable: React.FC<DataTableProps> = ({
                 ({selectedProfiles.size} selected)
               </span>
             )}
+            {getActiveFiltersCount() > 0 && (
+              <span className="ml-2 text-sm font-normal text-green-600">
+                ({getActiveFiltersCount()} filters active)
+              </span>
+            )}
           </h3>
           
           <div className="flex flex-col sm:flex-row gap-3">
@@ -465,6 +534,67 @@ export const DataTable: React.FC<DataTableProps> = ({
                 onChange={(e) => setFilter(e.target.value)}
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+            </div>
+            
+            {/* Data Filters Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDataFilters(!showDataFilters)}
+                className={`flex items-center gap-2 px-4 py-2 border rounded-lg transition-colors ${
+                  getActiveFiltersCount() > 0 
+                    ? 'border-green-500 bg-green-50 text-green-700' 
+                    : 'border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <Filter className="w-4 h-4" />
+                Data Filters
+                {getActiveFiltersCount() > 0 && (
+                  <span className="bg-green-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {getActiveFiltersCount()}
+                  </span>
+                )}
+                <ChevronDown className={`w-4 h-4 transition-transform ${showDataFilters ? 'rotate-180' : ''}`} />
+              </button>
+              
+              {showDataFilters && (
+                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-gray-900">Show profiles with:</h4>
+                    <button
+                      onClick={clearAllDataFilters}
+                      className="text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {[
+                      { key: 'hasEmail', label: 'Email address', icon: Mail },
+                      { key: 'hasPhone', label: 'Phone number', icon: Phone },
+                      { key: 'hasWebsite', label: 'Website', icon: Globe },
+                      { key: 'hasLocation', label: 'Location', icon: MapPin },
+                      { key: 'hasCurrentJob', label: 'Current job', icon: Briefcase },
+                      { key: 'hasAbout', label: 'About section', icon: Users },
+                      { key: 'hasSkills', label: 'Skills', icon: Award },
+                      { key: 'hasExperience', label: 'Experience', icon: Briefcase },
+                      { key: 'hasEducation', label: 'Education', icon: GraduationCap },
+                      { key: 'hasCertifications', label: 'Certifications', icon: Award }
+                    ].map(({ key, label, icon: Icon }) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+                        <input
+                          type="checkbox"
+                          checked={dataFilters[key as keyof typeof dataFilters]}
+                          onChange={() => toggleDataFilter(key as keyof typeof dataFilters)}
+                          className="text-blue-600 focus:ring-blue-500"
+                        />
+                        <Icon className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm text-gray-700">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             
             <div className="flex gap-2">
@@ -626,7 +756,17 @@ export const DataTable: React.FC<DataTableProps> = ({
 
       {filteredProfiles.length === 0 && (
         <div className="text-center py-12">
-          <div className="text-gray-500">No profiles found</div>
+          <div className="text-gray-500">
+            {getActiveFiltersCount() > 0 ? 'No profiles match the selected filters' : 'No profiles found'}
+          </div>
+          {getActiveFiltersCount() > 0 && (
+            <button
+              onClick={clearAllDataFilters}
+              className="mt-2 text-blue-600 hover:text-blue-800 text-sm"
+            >
+              Clear all filters
+            </button>
+          )}
         </div>
       )}
     </div>
