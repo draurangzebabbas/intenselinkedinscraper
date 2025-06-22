@@ -9,41 +9,17 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? 'Set' : 'Missing')
 }
 
-// Create Supabase client with enhanced configuration for better connectivity
-export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 10
-    }
-  },
-  global: {
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    fetch: (url, options = {}) => {
-      // Enhanced fetch with retry logic and better error handling
-      return fetchWithRetry(url, {
-        ...options,
-        timeout: 30000, // 30 second timeout
-      });
-    }
-  }
-})
-
 // Enhanced fetch function with retry logic and timeout
 async function fetchWithRetry(url: string | URL | Request, options: RequestInit & { timeout?: number } = {}, retries = 3): Promise<Response> {
   const { timeout = 30000, ...fetchOptions } = options;
   
   for (let i = 0; i < retries; i++) {
+    let timeoutId: NodeJS.Timeout | undefined;
+    
     try {
       // Create abort controller for timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      timeoutId = setTimeout(() => controller.abort(), timeout);
       
       const response = await fetch(url, {
         ...fetchOptions,
@@ -68,7 +44,9 @@ async function fetchWithRetry(url: string | URL | Request, options: RequestInit 
       }
       
     } catch (error) {
-      clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       if (error instanceof Error) {
         // Don't retry on abort (timeout) or certain network errors on final attempt
@@ -95,6 +73,32 @@ async function fetchWithRetry(url: string | URL | Request, options: RequestInit 
   
   throw new Error('Max retries exceeded');
 }
+
+// Create Supabase client with enhanced configuration for better connectivity
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '', {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
+    }
+  },
+  global: {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    fetch: (url, options = {}) => {
+      // Enhanced fetch with retry logic and better error handling
+      return fetchWithRetry(url, {
+        ...options,
+        timeout: 30000, // 30 second timeout
+      });
+    }
+  }
+})
 
 // Test Supabase connection with improved error handling and retry logic
 export const testSupabaseConnection = async () => {
