@@ -8,12 +8,52 @@ import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { UserSelector } from './components/UserSelector';
 import { ApifyKeyManager } from './components/ApifyKeyManager';
-import { supabase, testSupabaseConnection, safeSupabaseOperation } from './lib/supabase';
+import { supabase } from './lib/supabase';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
 import { processProfileImages } from './utils/imageUtils';
 import { Linkedin, Database, Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
-import type { User, ApifyKey, LinkedInProfile, ScrapingJob } from './lib/supabase';
+
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  full_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ApifyKey {
+  id: string;
+  user_id: string;
+  key_name: string;
+  api_key: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface LinkedInProfile {
+  id: string;
+  user_id: string;
+  linkedin_url: string;
+  profile_data: any;
+  last_updated: string;
+  created_at: string;
+}
+
+interface ScrapingJob {
+  id: string;
+  user_id: string;
+  apify_key_id?: string;
+  job_type: 'post_comments' | 'profile_details' | 'mixed';
+  input_url: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  results_count: number;
+  error_message?: string;
+  created_at: string;
+  completed_at?: string;
+}
 
 interface CommentData {
   type: string;
@@ -93,21 +133,43 @@ function App() {
   }, [currentUser, isOnline]);
 
   const initializeApp = async () => {
-    if (!isOnline) {
-      setConnectionError('No internet connection. Please check your network and try again.');
-      return;
+    try {
+      if (!isOnline) {
+        setConnectionError('No internet connection. Please check your network and try again.');
+        return;
+      }
+      
+      // Test basic connection
+      const testResponse = await fetch(window.location.origin);
+      if (!testResponse.ok) {
+        throw new Error('Network connection test failed');
+      }
+      
+      // Connection successful, clear any errors
+      setConnectionError('');
+    } catch (error) {
+      console.error('App initialization error:', error);
+      setConnectionError('Failed to initialize application. Please refresh the page.');
     }
-    
-    // Test Supabase connection first
-    const connectionTest = await testSupabaseConnection();
-    
-    if (!connectionTest.success) {
-      setConnectionError(connectionTest.error || 'Failed to connect to Supabase');
-      return;
+  };
+
+  const safeSupabaseOperation = async <T,>(
+    operation: () => Promise<{ data: T | null; error: any }>,
+    operationName: string = 'database operation'
+  ): Promise<{ data: T | null; error: any }> => {
+    try {
+      const result = await operation();
+      return result;
+    } catch (error) {
+      console.error(`${operationName} failed:`, error);
+      return {
+        data: null,
+        error: {
+          message: error instanceof Error ? error.message : `Unknown error during ${operationName}`,
+          code: 'UNKNOWN_ERROR'
+        }
+      };
     }
-    
-    // Connection successful, clear any errors
-    setConnectionError('');
   };
 
   const loadData = async () => {
@@ -129,11 +191,7 @@ function App() {
 
       if (profilesResult.error) {
         console.error('Profiles error:', profilesResult.error);
-        if (profilesResult.error.code === 'PGRST116') {
-          setProfiles([]);
-        } else {
-          throw new Error(profilesResult.error.message);
-        }
+        setProfiles([]);
       } else {
         setProfiles(profilesResult.data || []);
       }
@@ -151,17 +209,13 @@ function App() {
 
       if (jobsResult.error) {
         console.error('Jobs error:', jobsResult.error);
-        if (jobsResult.error.code === 'PGRST116') {
-          setJobs([]);
-        } else {
-          throw new Error(jobsResult.error.message);
-        }
+        setJobs([]);
       } else {
         setJobs(jobsResult.data || []);
       }
     } catch (error) {
       console.error('Error loading data:', error);
-      setConnectionError(error instanceof Error ? error.message : 'Unknown error occurred while loading data');
+      setConnectionError('Failed to load data. Please try again.');
     }
   };
 
@@ -188,7 +242,7 @@ function App() {
     }
     
     if (connectionError) {
-      alert('Cannot start scraping: Database connection error. Please check your Supabase configuration.');
+      alert('Cannot start scraping: Connection error. Please check your configuration.');
       return;
     }
 
@@ -330,32 +384,6 @@ function App() {
       setLoadingError(errorMessage);
       updateLoadingProgress('error', 0, 'Scraping failed');
       
-      // Update job status to failed
-      const jobsResult = await safeSupabaseOperation(
-        () => supabase
-          .from('scraping_jobs')
-          .select('id')
-          .eq('input_url', url)
-          .eq('status', 'running')
-          .order('created_at', { ascending: false })
-          .limit(1),
-        'finding job to update'
-      );
-
-      if (jobsResult.data && jobsResult.data.length > 0) {
-        await safeSupabaseOperation(
-          () => supabase
-            .from('scraping_jobs')
-            .update({
-              status: 'failed',
-              error_message: errorMessage,
-              completed_at: new Date().toISOString()
-            })
-            .eq('id', jobsResult.data[0].id),
-          'updating failed job status'
-        );
-      }
-      
       await loadData();
     } finally {
       setIsLoading(false);
@@ -402,7 +430,7 @@ function App() {
         const profileData = newProfilesData[i];
         const linkedinUrl = profileData.linkedinUrl;
         if (linkedinUrl) {
-          updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Converting images for profile ${i + 1}/${newProfilesData.length}...`);
+          updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Processing profile ${i + 1}/${newProfilesData.length}...`);
           const processedProfile = await processProfileImages(profileData);
           
           // Store in user's database
@@ -683,7 +711,7 @@ function App() {
           <div className="space-y-4">
             <p className="text-gray-600">
               {isOnline 
-                ? 'There was an issue connecting to the database:'
+                ? 'There was an issue with the application:'
                 : 'You appear to be offline. Please check your internet connection.'
               }
             </p>
