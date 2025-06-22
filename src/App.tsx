@@ -6,33 +6,14 @@ import { CommentResults } from './components/CommentResults';
 import { ProfileDetailsDisplay } from './components/ProfileDetailsDisplay';
 import { LoadingProgress } from './components/LoadingProgress';
 import { ProfileResultsTable } from './components/ProfileResultsTable';
-import { Auth } from './components/Auth';
-import { UserMenu } from './components/UserMenu';
-import { UserProfile } from './components/UserProfile';
-import { supabase, testSupabaseConnection, simpleConnectionTest, safeSupabaseOperation } from './lib/supabase';
-import { apifyService } from './lib/apify';
+import { UserSelector } from './components/UserSelector';
+import { ApifyKeyManager } from './components/ApifyKeyManager';
+import { supabase, testSupabaseConnection, safeSupabaseOperation } from './lib/supabase';
+import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
 import { processProfileImages } from './utils/imageUtils';
 import { Linkedin, Database, Activity, AlertCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
-
-interface Profile {
-  id: string;
-  linkedin_url: string;
-  profile_data: any;
-  last_updated: string | null;
-  created_at: string | null;
-}
-
-interface Job {
-  id: string;
-  job_type: string;
-  input_url: string;
-  status: string | null;
-  results_count: number | null;
-  error_message: string | null;
-  created_at: string | null;
-  completed_at: string | null;
-}
+import type { User, ApifyKey, LinkedInProfile, ScrapingJob } from './lib/supabase';
 
 interface CommentData {
   type: string;
@@ -50,20 +31,20 @@ interface CommentData {
 }
 
 function App() {
-  // Authentication state
-  const [user, setUser] = useState<any>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  // User and API key state
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [selectedApifyKey, setSelectedApifyKey] = useState<ApifyKey | null>(null);
 
   // Application state
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [profiles, setProfiles] = useState<LinkedInProfile[]>([]);
+  const [jobs, setJobs] = useState<ScrapingJob[]>([]);
   const [commentersData, setCommentersData] = useState<CommentData[]>([]);
   const [profileDetails, setProfileDetails] = useState<any[]>([]);
   const [selectedProfileForDetails, setSelectedProfileForDetails] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   const [connectionError, setConnectionError] = useState<string>('');
   const [isRetrying, setIsRetrying] = useState(false);
@@ -77,14 +58,13 @@ function App() {
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
   useEffect(() => {
-    // Initialize authentication
-    initializeAuth();
+    // Initialize app
+    initializeApp();
     
     // Listen for online/offline events
     const handleOnline = () => {
       setIsOnline(true);
       console.log('Connection restored');
-      // Retry connection when coming back online
       if (connectionError) {
         handleRetryConnection();
       }
@@ -106,55 +86,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Load data when user is authenticated and online
-    if (user && isOnline) {
-      initializeApp();
+    // Load data when user changes
+    if (currentUser && isOnline) {
+      loadData();
     }
-  }, [user, isOnline]);
-
-  const initializeAuth = async () => {
-    try {
-      // Get initial session
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
-      if (error) {
-        console.error('Error getting session:', error);
-      } else {
-        setUser(session?.user ?? null);
-      }
-
-      // Listen for auth changes
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (event, session) => {
-          console.log('Auth state changed:', event, session?.user?.email);
-          setUser(session?.user ?? null);
-          
-          if (event === 'SIGNED_OUT') {
-            // Clear application state on sign out
-            setProfiles([]);
-            setJobs([]);
-            setCommentersData([]);
-            setProfileDetails([]);
-            setSelectedProfileForDetails(null);
-            setActiveTab('scraper');
-            setCurrentView('form');
-            setConnectionError('');
-          }
-        }
-      );
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    } catch (error) {
-      console.error('Auth initialization error:', error);
-    } finally {
-      setIsAuthLoading(false);
-    }
-  };
+  }, [currentUser, isOnline]);
 
   const initializeApp = async () => {
-    // Check if we're online first
     if (!isOnline) {
       setConnectionError('No internet connection. Please check your network and try again.');
       return;
@@ -168,19 +106,22 @@ function App() {
       return;
     }
     
-    // If connection is successful, load data
-    await loadData();
+    // Connection successful, clear any errors
+    setConnectionError('');
   };
 
   const loadData = async () => {
+    if (!currentUser) return;
+
     try {
-      setConnectionError(''); // Clear any previous connection errors
+      setConnectionError('');
       
-      // Load profiles with enhanced error handling
+      // Load user's profiles
       const profilesResult = await safeSupabaseOperation(
         () => supabase
           .from('linkedin_profiles')
           .select('*')
+          .eq('user_id', currentUser.id)
           .order('last_updated', { ascending: false })
           .limit(100),
         'loading profiles'
@@ -188,27 +129,21 @@ function App() {
 
       if (profilesResult.error) {
         console.error('Profiles error:', profilesResult.error);
-        
-        // Handle specific errors
-        if (profilesResult.error.code === 'PGRST116' || 
-            (profilesResult.error.message && profilesResult.error.message.includes('does not exist'))) {
-          // Table doesn't exist - this is OK for initial setup
-          console.log('Tables not found - this is normal for initial setup');
+        if (profilesResult.error.code === 'PGRST116') {
           setProfiles([]);
-        } else if (profilesResult.error.code === 'NETWORK_ERROR') {
-          throw new Error(profilesResult.error.message);
         } else {
-          throw new Error(`Failed to load profiles: ${profilesResult.error.message}`);
+          throw new Error(profilesResult.error.message);
         }
       } else {
         setProfiles(profilesResult.data || []);
       }
 
-      // Load jobs with enhanced error handling
+      // Load user's jobs
       const jobsResult = await safeSupabaseOperation(
         () => supabase
           .from('scraping_jobs')
           .select('*')
+          .eq('user_id', currentUser.id)
           .order('created_at', { ascending: false })
           .limit(50),
         'loading jobs'
@@ -216,32 +151,17 @@ function App() {
 
       if (jobsResult.error) {
         console.error('Jobs error:', jobsResult.error);
-        
-        // Handle specific errors
-        if (jobsResult.error.code === 'PGRST116' || 
-            (jobsResult.error.message && jobsResult.error.message.includes('does not exist'))) {
-          // Table doesn't exist - this is OK for initial setup
-          console.log('Jobs table not found - this is normal for initial setup');
+        if (jobsResult.error.code === 'PGRST116') {
           setJobs([]);
-        } else if (jobsResult.error.code === 'NETWORK_ERROR') {
-          throw new Error(jobsResult.error.message);
         } else {
-          throw new Error(`Failed to load jobs: ${jobsResult.error.message}`);
+          throw new Error(jobsResult.error.message);
         }
       } else {
         setJobs(jobsResult.data || []);
       }
     } catch (error) {
       console.error('Error loading data:', error);
-      let errorMessage = 'Unknown error occurred while loading data';
-      
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      } else if (typeof error === 'string') {
-        errorMessage = error;
-      }
-      
-      setConnectionError(errorMessage);
+      setConnectionError(error instanceof Error ? error.message : 'Unknown error occurred while loading data');
     }
   };
 
@@ -252,7 +172,16 @@ function App() {
   };
 
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
-    // Check connection before starting scraping
+    if (!currentUser) {
+      alert('Please select a user first');
+      return;
+    }
+
+    if (!selectedApifyKey) {
+      alert('Please select an Apify API key first');
+      return;
+    }
+
     if (!isOnline) {
       alert('Cannot start scraping: No internet connection. Please check your network and try again.');
       return;
@@ -269,11 +198,13 @@ function App() {
     updateLoadingProgress('starting', 0, 'Initializing scraping process...');
     
     try {
-      // Create job record with enhanced error handling
+      // Create job record
       const jobResult = await safeSupabaseOperation(
         () => supabase
           .from('scraping_jobs')
           .insert({
+            user_id: currentUser.id,
+            apify_key_id: selectedApifyKey.id,
             job_type: type,
             input_url: url,
             status: 'running'
@@ -288,14 +219,14 @@ function App() {
       }
 
       const job = jobResult.data;
-
-      // Refresh jobs list
       await loadData();
+
+      // Create Apify service with selected key
+      const apifyService = createApifyService(selectedApifyKey.api_key);
 
       if (type === 'post_comments') {
         updateLoadingProgress('scraping_comments', 25, 'Extracting comments from LinkedIn post...');
         
-        // Scrape post comments and show them to user
         const datasetId = await apifyService.scrapePostComments(url);
         
         updateLoadingProgress('saving_data', 75, 'Processing comment data...');
@@ -306,7 +237,6 @@ function App() {
         
         updateLoadingProgress('completed', 100, 'Comments extracted successfully!');
 
-        // Update job status
         await safeSupabaseOperation(
           () => supabase
             .from('scraping_jobs')
@@ -322,17 +252,15 @@ function App() {
       } else if (type === 'profile_details') {
         updateLoadingProgress('scraping_profiles', 25, 'Gathering detailed profile information...');
         
-        // Scrape single profile and show details
-        const profilesData = await getProfilesWithDetails([url]);
+        const profilesData = await getProfilesWithDetails([url], apifyService);
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
-        setPreviousView('form'); // Set previous view to form for single profile scraping
+        setPreviousView('form');
         setCurrentView('profile-table');
         
         updateLoadingProgress('completed', 100, 'Profile details scraped successfully!');
         
-        // Update job status
         await safeSupabaseOperation(
           () => supabase
             .from('scraping_jobs')
@@ -348,32 +276,29 @@ function App() {
       } else if (type === 'mixed') {
         updateLoadingProgress('scraping_comments', 20, 'Extracting comments from LinkedIn post...');
         
-        // Scrape post comments first
         const datasetId = await apifyService.scrapePostComments(url);
         const commentsData = await apifyService.getDatasetItems(datasetId);
         
         updateLoadingProgress('extracting_profiles', 40, 'Extracting profile URLs from comments...');
         
-        // Extract profile URLs from comments
         const profileUrls = commentsData
           .map(comment => comment.actor?.linkedinUrl)
           .filter(Boolean)
-          .slice(0, 50); // Limit to first 50 profiles
+          .slice(0, 50);
         
         if (profileUrls.length > 0) {
           updateLoadingProgress('scraping_profiles', 60, `Scraping ${profileUrls.length} profile details...`);
           
-          const profilesData = await getProfilesWithDetails(profileUrls);
+          const profilesData = await getProfilesWithDetails(profileUrls, apifyService);
           
           updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
-          setPreviousView('form'); // Set previous view to form for mixed scraping
+          setPreviousView('form');
           setCurrentView('profile-table');
         }
 
         updateLoadingProgress('completed', 100, 'Mixed scraping completed successfully!');
 
-        // Update job status
         await safeSupabaseOperation(
           () => supabase
             .from('scraping_jobs')
@@ -395,7 +320,6 @@ function App() {
       if (error instanceof Error) {
         errorMessage = error.message;
         
-        // Provide more helpful error messages for common issues
         if (errorMessage.includes('Failed to fetch') || errorMessage.includes('Network')) {
           errorMessage = 'Network connection failed. Please check your internet connection and try again.';
         } else if (errorMessage.includes('timeout')) {
@@ -438,12 +362,15 @@ function App() {
     }
   };
 
-  const getProfilesWithDetails = async (profileUrls: string[]): Promise<any[]> => {
-    // Check which profiles already exist in database
+  const getProfilesWithDetails = async (profileUrls: string[], apifyService: any): Promise<any[]> => {
+    if (!currentUser) return [];
+
+    // Check which profiles already exist in user's database
     const existingProfilesResult = await safeSupabaseOperation(
       () => supabase
         .from('linkedin_profiles')
         .select('*')
+        .eq('user_id', currentUser.id)
         .in('linkedin_url', profileUrls),
       'checking existing profiles'
     );
@@ -475,25 +402,24 @@ function App() {
         const profileData = newProfilesData[i];
         const linkedinUrl = profileData.linkedinUrl;
         if (linkedinUrl) {
-          // Process images to base64
           updateLoadingProgress('saving_data', 80 + (i / newProfilesData.length) * 15, `Converting images for profile ${i + 1}/${newProfilesData.length}...`);
           const processedProfile = await processProfileImages(profileData);
           
-          // Store in database using UPSERT to prevent duplicates
+          // Store in user's database
           await safeSupabaseOperation(
             () => supabase
               .from('linkedin_profiles')
               .upsert({
+                user_id: currentUser.id,
                 linkedin_url: linkedinUrl,
                 profile_data: processedProfile,
                 last_updated: new Date().toISOString()
               }, {
-                onConflict: 'linkedin_url'
+                onConflict: 'user_id,linkedin_url'
               }),
             'saving profile data'
           );
           
-          // Add to results
           allProfileDetails.push(processedProfile);
         }
       }
@@ -503,6 +429,11 @@ function App() {
   };
 
   const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
+    if (!selectedApifyKey) {
+      alert('Please select an Apify API key first');
+      return;
+    }
+
     if (!isOnline) {
       alert('Cannot start scraping: No internet connection. Please check your network and try again.');
       return;
@@ -514,14 +445,14 @@ function App() {
     updateLoadingProgress('scraping_profiles', 25, `Scraping ${profileUrls.length} selected profiles...`);
     
     try {
-      const profilesData = await getProfilesWithDetails(profileUrls);
+      const apifyService = createApifyService(selectedApifyKey.api_key);
+      const profilesData = await getProfilesWithDetails(profileUrls, apifyService);
       updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
-      setPreviousView('comments'); // Remember we came from comments
+      setPreviousView('comments');
       setCurrentView('profile-table');
       updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
       
-      // Refresh the main profiles data
       await loadData();
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
@@ -540,8 +471,10 @@ function App() {
   };
 
   const handleUpdateProfile = async (profileUrl: string) => {
+    if (!selectedApifyKey || !currentUser) return;
+
     try {
-      // Force update by scraping new data
+      const apifyService = createApifyService(selectedApifyKey.api_key);
       const datasetId = await apifyService.scrapeProfiles([profileUrl]);
       const profilesData = await apifyService.getDatasetItems(datasetId);
       
@@ -549,19 +482,18 @@ function App() {
         const profileData = profilesData[0];
         const linkedinUrl = profileData.linkedinUrl;
         
-        // Process images to base64
         const processedProfile = await processProfileImages(profileData);
         
-        // Update in database using UPSERT to prevent duplicates
         await safeSupabaseOperation(
           () => supabase
             .from('linkedin_profiles')
             .upsert({
+              user_id: currentUser.id,
               linkedin_url: linkedinUrl,
               profile_data: processedProfile,
               last_updated: new Date().toISOString()
             }, {
-              onConflict: 'linkedin_url'
+              onConflict: 'user_id,linkedin_url'
             }),
           'updating profile'
         );
@@ -570,11 +502,13 @@ function App() {
       await loadData();
     } catch (error) {
       console.error('Error updating profile:', error);
-      throw error; // Re-throw to handle in component
+      throw error;
     }
   };
 
   const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
+    if (!selectedApifyKey || !currentUser) return;
+
     if (!isOnline) {
       alert('Cannot update profiles: No internet connection. Please check your network and try again.');
       return;
@@ -583,32 +517,29 @@ function App() {
     setIsUpdating(true);
     
     try {
-      // Update profiles in batches to avoid overwhelming the API
+      const apifyService = createApifyService(selectedApifyKey.api_key);
       const batchSize = 5;
       for (let i = 0; i < profileUrls.length; i += batchSize) {
         const batch = profileUrls.slice(i, i + batchSize);
         
-        // Scrape batch
         const datasetId = await apifyService.scrapeProfiles(batch);
         const profilesData = await apifyService.getDatasetItems(datasetId);
         
-        // Update each profile in the database
         for (const profileData of profilesData) {
           const linkedinUrl = profileData.linkedinUrl;
           if (linkedinUrl) {
-            // Process images to base64
             const processedProfile = await processProfileImages(profileData);
             
-            // Update in database using UPSERT to prevent duplicates
             await safeSupabaseOperation(
               () => supabase
                 .from('linkedin_profiles')
                 .upsert({
+                  user_id: currentUser.id,
                   linkedin_url: linkedinUrl,
                   profile_data: processedProfile,
                   last_updated: new Date().toISOString()
                 }, {
-                  onConflict: 'linkedin_url'
+                  onConflict: 'user_id,linkedin_url'
                 }),
               'updating profile in batch'
             );
@@ -646,8 +577,6 @@ function App() {
 
   const handleExport = (format: string, selectedOnly: boolean = false) => {
     if (selectedOnly) {
-      // Export only selected profiles - this would need to be implemented
-      // For now, export all profiles
       exportData(profiles, format, 'linkedin_profiles_selected');
     } else {
       exportData(profiles, format, 'linkedin_profiles');
@@ -684,7 +613,6 @@ function App() {
   };
 
   const handleViewProfileDetails = (profile: any) => {
-    // Set the previous view based on current context
     if (activeTab === 'profiles') {
       setPreviousView('profiles-list');
       setSelectedProfileForDetails(profile);
@@ -701,30 +629,18 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
-  const handleOpenUserProfile = () => {
-    setCurrentView('user-profile');
-  };
-
-  const handleBackFromUserProfile = () => {
-    setCurrentView('form');
-    setActiveTab('scraper');
-  };
-
-  // Handle tab changes and ensure data is loaded
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
     
-    // Set appropriate view based on tab
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      // Ensure profiles data is fresh when switching to profiles tab
-      if (isOnline && !connectionError) {
+      if (isOnline && !connectionError && currentUser) {
         await loadData();
       }
     } else if (tab === 'scraper') {
       setCurrentView('form');
     } else if (tab === 'jobs') {
-      setCurrentView('form'); // Jobs tab doesn't need special view handling
+      setCurrentView('form');
     }
   };
 
@@ -733,19 +649,11 @@ function App() {
     setConnectionError('');
     
     try {
-      // Check if we're online first
       if (!isOnline) {
         throw new Error('No internet connection. Please check your network and try again.');
       }
       
-      // Try simple connection test first
-      const simpleTest = await simpleConnectionTest();
-      if (simpleTest.success) {
-        await initializeApp();
-      } else {
-        // Try full connection test
-        await initializeApp();
-      }
+      await initializeApp();
     } catch (error) {
       console.error('Retry failed:', error);
       setConnectionError(error instanceof Error ? error.message : 'Retry failed');
@@ -753,31 +661,6 @@ function App() {
       setIsRetrying(false);
     }
   };
-
-  // Show loading screen while checking authentication
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="p-3 bg-blue-100 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-            <Linkedin className="w-8 h-8 text-blue-600" />
-          </div>
-          <div className="text-lg font-medium text-gray-900 mb-2">LinkedIn Scraper</div>
-          <div className="text-gray-600">Loading...</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show authentication screen if user is not logged in
-  if (!user) {
-    return <Auth onAuthSuccess={() => {}} />;
-  }
-
-  // Show user profile if that view is active
-  if (currentView === 'user-profile') {
-    return <UserProfile user={user} onBack={handleBackFromUserProfile} />;
-  }
 
   // Show connection error banner if there's a connection issue
   if (connectionError) {
@@ -812,19 +695,6 @@ function App() {
               </pre>
             </div>
             
-            {isOnline && (
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-gray-700">This could be due to:</p>
-                <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
-                  <li>Network connectivity issues</li>
-                  <li>Supabase project configuration</li>
-                  <li>Database tables not yet created (normal for first setup)</li>
-                  <li>Temporary service interruption</li>
-                  <li>Firewall or proxy blocking the connection</li>
-                </ul>
-              </div>
-            )}
-            
             <div className="flex gap-3">
               <button
                 onClick={handleRetryConnection}
@@ -843,17 +713,8 @@ function App() {
                   </>
                 )}
               </button>
-              {isOnline && (
-                <button
-                  onClick={() => window.open('https://supabase.com/dashboard', '_blank')}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-                >
-                  Open Supabase Dashboard
-                </button>
-              )}
             </div>
             
-            {/* Connection status indicator */}
             <div className="flex items-center justify-center gap-2 text-sm">
               {isOnline ? (
                 <>
@@ -885,7 +746,6 @@ function App() {
               </div>
               <h1 className="text-2xl font-bold text-gray-900">LinkedIn Scraper</h1>
               
-              {/* Connection status indicator in header */}
               <div className="flex items-center gap-1">
                 {isOnline ? (
                   <Wifi className="w-4 h-4 text-green-600" />
@@ -931,8 +791,6 @@ function App() {
                   Jobs ({jobs.length})
                 </button>
               </nav>
-
-              <UserMenu user={user} onOpenProfile={handleOpenUserProfile} />
             </div>
           </div>
         </div>
@@ -940,13 +798,33 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* User and API Key Management */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          <UserSelector
+            currentUser={currentUser}
+            onUserChange={setCurrentUser}
+            onManageUsers={() => {}}
+          />
+          
+          {currentUser && (
+            <ApifyKeyManager
+              userId={currentUser.id}
+              selectedKeyId={selectedApifyKey?.id}
+              onKeySelect={setSelectedApifyKey}
+            />
+          )}
+        </div>
+
         {activeTab === 'scraper' && (
           <div className="space-y-8">
             {currentView === 'form' && (
               <>
-                <ScrapingForm onScrape={handleScrape} isLoading={isLoading} />
+                <ScrapingForm 
+                  onScrape={handleScrape} 
+                  isLoading={isLoading}
+                  disabled={!currentUser || !selectedApifyKey}
+                />
                 
-                {/* Loading Progress */}
                 {isLoading && (
                   <LoadingProgress
                     type={scrapingType}
@@ -966,7 +844,7 @@ function App() {
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Total Profiles</div>
+                        <div className="text-sm text-gray-600">Your Profiles</div>
                       </div>
                     </div>
                   </div>
