@@ -10,8 +10,10 @@ import { ApifyKeyManager } from './components/ApifyKeyManager';
 import { UserMenu } from './components/UserMenu';
 import { UserProfile } from './components/UserProfile';
 import { JobsTable } from './components/JobsTable';
+import { StorageManager } from './components/StorageManager';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
+import { ImageStorageService } from './utils/imageStorage';
 import { 
   supabase, 
   getCurrentUser, 
@@ -25,7 +27,7 @@ import {
   type LinkedInProfile,
   type ScrapingJob
 } from './lib/supabase';
-import { Linkedin, Database, Activity, Key, Clock, Loader2, AlertCircle } from 'lucide-react';
+import { Linkedin, Database, Activity, Key, Clock, Loader2, AlertCircle, HardDrive } from 'lucide-react';
 
 interface CommentData {
   type: string;
@@ -57,8 +59,8 @@ function App() {
   const [scrapingJobs, setScrapingJobs] = useState<ScrapingJob[]>([]);
   
   // UI state
-  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
+  const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs' | 'storage'>('scraper');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile' | 'storage'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   
   // Performance optimization: Add loading state for profiles tab
@@ -134,6 +136,9 @@ function App() {
 
         // Check connection with retry logic
         await checkSupabaseConnection(3);
+
+        // Initialize image storage
+        await ImageStorageService.initializeBucket();
 
         // Get current session
         console.log('Getting current session...');
@@ -372,7 +377,7 @@ function App() {
         const profileUrls = Array.isArray(url) ? url : [url];
         const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
         
-        updateLoadingProgress('saving_data', 75, 'Saving profile data...');
+        updateLoadingProgress('saving_data', 75, 'Saving profile data with image optimization...');
         setProfileDetails(profilesData);
         setPreviousView('form');
         setCurrentView('profile-table');
@@ -398,7 +403,7 @@ function App() {
           
           const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
           
-          updateLoadingProgress('saving_data', 85, 'Saving all data...');
+          updateLoadingProgress('saving_data', 85, 'Saving all data with image optimization...');
           setProfileDetails(profilesData);
           setPreviousView('form');
           setCurrentView('profile-table');
@@ -408,7 +413,7 @@ function App() {
         await updateScrapingJob(jobId, 'completed', profileUrls.length);
       }
 
-      // Refresh profiles list - only get user's profiles if we're not on the profiles tab
+      // Refresh profiles list based on current tab
       if (activeTab !== 'profiles') {
         const updatedProfiles = await getUserProfiles(userProfile.id);
         setProfiles(updatedProfiles);
@@ -462,9 +467,9 @@ function App() {
       const datasetId = await apifyService.scrapeProfiles(urlsToScrape);
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
-      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
+      updateLoadingProgress('scraping_profiles', 70, 'Optimizing and saving new profiles...');
       
-      // Save new profiles to database
+      // Save new profiles to database with image optimization
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           await upsertProfile(userId, profileData.linkedinUrl, profileData);
@@ -508,7 +513,7 @@ function App() {
       const apifyService = createApifyService(keyData.api_key);
       const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
       
-      updateLoadingProgress('saving_data', 75, 'Processing profile data...');
+      updateLoadingProgress('saving_data', 75, 'Processing profile data with image optimization...');
       setProfileDetails(profilesData);
       setPreviousView('comments');
       setCurrentView('profile-table');
@@ -721,7 +726,7 @@ function App() {
   };
 
   // Performance optimization: Load all profiles only when profiles tab is clicked
-  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
+  const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs' | 'storage') => {
     setActiveTab(tab);
     
     if (tab === 'profiles') {
@@ -748,6 +753,8 @@ function App() {
       }
     } else if (tab === 'jobs') {
       setCurrentView('form'); // Jobs will be shown in the main content
+    } else if (tab === 'storage') {
+      setCurrentView('storage');
     }
   };
 
@@ -882,6 +889,17 @@ function App() {
                   <Clock className="w-4 h-4 inline mr-2" />
                   Jobs ({scrapingJobs.length})
                 </button>
+                <button
+                  onClick={() => handleTabChange('storage')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'storage'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <HardDrive className="w-4 h-4 inline mr-2" />
+                  Storage
+                </button>
               </nav>
               
               <UserMenu user={user} onOpenProfile={handleOpenProfile} />
@@ -894,6 +912,8 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {currentView === 'user-profile' ? (
           <UserProfile user={user} onBack={() => setCurrentView('form')} />
+        ) : currentView === 'storage' ? (
+          <StorageManager />
         ) : (
           <>
             {/* API Key Management */}

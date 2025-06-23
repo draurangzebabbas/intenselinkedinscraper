@@ -127,12 +127,21 @@ export const upsertProfile = async (
   tags: string[] = []
 ): Promise<LinkedInProfile | null> => {
   try {
+    // Import image storage service
+    const { ImageStorageService } = await import('../utils/imageStorage');
+    
+    // Optimize images before storing
+    const optimizedProfileData = await ImageStorageService.optimizeProfileImages(
+      profileData, 
+      `${userId}-${Date.now()}`
+    );
+
     const { data, error } = await supabase
       .from('linkedin_profiles')
       .upsert({
         user_id: userId,
         linkedin_url: linkedinUrl,
-        profile_data: profileData,
+        profile_data: optimizedProfileData,
         tags,
         last_updated: new Date().toISOString()
       }, {
