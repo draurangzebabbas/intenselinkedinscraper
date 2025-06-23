@@ -25,7 +25,7 @@ import {
   type LinkedInProfile,
   type ScrapingJob
 } from './lib/supabase';
-import { Linkedin, Database, Activity, Key, Clock } from 'lucide-react';
+import { Linkedin, Database, Activity, Key, Clock, Loader2 } from 'lucide-react';
 
 interface CommentData {
   type: string;
@@ -59,6 +59,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs'>('scraper');
   const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'user-profile'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
+  
+  // Performance optimization: Add loading state for profiles tab
+  const [isProfilesTabLoading, setIsProfilesTabLoading] = useState(false);
   
   // Scraping state
   const [isScraping, setIsScraping] = useState(false);
@@ -107,16 +110,16 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Performance optimization: Load only user's profiles initially
   const loadUserData = async (userId: string) => {
     try {
-      // Load user's profiles and all profiles for viewing
-      const [userProfiles, allProfiles, jobs] = await Promise.all([
-        getUserProfiles(userId),
-        getAllProfiles(),
+      // Load user's profiles and jobs initially (not all profiles)
+      const [userProfilesData, jobs] = await Promise.all([
+        getUserProfiles(userId), // Only fetch user's profiles for faster initial load
         loadScrapingJobs(userId)
       ]);
       
-      setProfiles(allProfiles);
+      setProfiles(userProfilesData); // Set to user's profiles only
       setScrapingJobs(jobs);
     } catch (error) {
       console.error('Error loading user data:', error);
@@ -285,9 +288,15 @@ function App() {
         await updateScrapingJob(jobId, 'completed', profileUrls.length);
       }
 
-      // Refresh profiles list
-      const updatedProfiles = await getAllProfiles();
-      setProfiles(updatedProfiles);
+      // Refresh profiles list - only get user's profiles if we're not on the profiles tab
+      if (activeTab !== 'profiles') {
+        const updatedProfiles = await getUserProfiles(userProfile.id);
+        setProfiles(updatedProfiles);
+      } else {
+        // If we're on profiles tab, refresh all profiles
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+      }
 
     } catch (error) {
       console.error('Scraping error:', error);
@@ -387,9 +396,14 @@ function App() {
       
       await updateScrapingJob(jobId, 'completed', profilesData.length);
       
-      // Refresh profiles list
-      const updatedProfiles = await getAllProfiles();
-      setProfiles(updatedProfiles);
+      // Refresh profiles list based on current tab
+      if (activeTab === 'profiles') {
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+      } else {
+        const updatedProfiles = await getUserProfiles(userProfile.id);
+        setProfiles(updatedProfiles);
+      }
       
     } catch (error) {
       console.error('Error scraping selected profiles:', error);
@@ -418,9 +432,14 @@ function App() {
         }
       }
       
-      // Refresh profiles list
-      const updatedProfiles = await getAllProfiles();
-      setProfiles(updatedProfiles);
+      // Refresh profiles list based on current tab
+      if (activeTab === 'profiles') {
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+      } else {
+        const updatedProfiles = await getUserProfiles(userProfile.id);
+        setProfiles(updatedProfiles);
+      }
       
       alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
       
@@ -452,9 +471,14 @@ function App() {
       const profilesData = await getProfilesWithOptimization([profileUrl], apifyService, userProfile.id);
       
       if (profilesData.length > 0) {
-        // Refresh profiles list
-        const updatedProfiles = await getAllProfiles();
-        setProfiles(updatedProfiles);
+        // Refresh profiles list based on current tab
+        if (activeTab === 'profiles') {
+          const updatedProfiles = await getAllProfiles();
+          setProfiles(updatedProfiles);
+        } else {
+          const updatedProfiles = await getUserProfiles(userProfile.id);
+          setProfiles(updatedProfiles);
+        }
         alert('Profile updated successfully!');
       }
     } catch (error) {
@@ -484,9 +508,14 @@ function App() {
       const apifyService = createApifyService(keyData.api_key);
       await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
       
-      // Refresh profiles list
-      const updatedProfiles = await getAllProfiles();
-      setProfiles(updatedProfiles);
+      // Refresh profiles list based on current tab
+      if (activeTab === 'profiles') {
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+      } else {
+        const updatedProfiles = await getUserProfiles(userProfile.id);
+        setProfiles(updatedProfiles);
+      }
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
       console.error('Error updating profiles:', error);
@@ -505,9 +534,14 @@ function App() {
       
       if (error) throw error;
       
-      // Refresh profiles list
-      const updatedProfiles = await getAllProfiles();
-      setProfiles(updatedProfiles);
+      // Refresh profiles list based on current tab
+      if (activeTab === 'profiles') {
+        const updatedProfiles = await getAllProfiles();
+        setProfiles(updatedProfiles);
+      } else {
+        const updatedProfiles = await getUserProfiles(userProfile.id);
+        setProfiles(updatedProfiles);
+      }
       
       alert(`Successfully deleted ${profileIds.length} profiles`);
     } catch (error) {
@@ -566,13 +600,32 @@ function App() {
     setSelectedProfileForDetails(null);
   };
 
+  // Performance optimization: Load all profiles only when profiles tab is clicked
   const handleTabChange = async (tab: 'scraper' | 'profiles' | 'jobs') => {
     setActiveTab(tab);
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
+      setIsProfilesTabLoading(true);
+      try {
+        const allProfilesData = await getAllProfiles();
+        setProfiles(allProfilesData);
+      } catch (error) {
+        console.error('Error loading all profiles:', error);
+      } finally {
+        setIsProfilesTabLoading(false);
+      }
     } else if (tab === 'scraper') {
       setCurrentView('form');
+      // Load user's profiles when switching back to scraper
+      if (userProfile) {
+        try {
+          const userProfilesData = await getUserProfiles(userProfile.id);
+          setProfiles(userProfilesData);
+        } catch (error) {
+          console.error('Error loading user profiles:', error);
+        }
+      }
     } else if (tab === 'jobs') {
       setCurrentView('form'); // Jobs will be shown in the main content
     }
@@ -703,7 +756,7 @@ function App() {
                           </div>
                           <div>
                             <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                            <div className="text-sm text-gray-600">Total Profiles</div>
+                            <div className="text-sm text-gray-600">Your Profiles</div>
                           </div>
                         </div>
                       </div>
@@ -787,15 +840,26 @@ function App() {
                     onBack={handleBackToProfilesList}
                   />
                 ) : (
-                  <DataTable
-                    profiles={profiles}
-                    onUpdateProfile={handleUpdateProfile}
-                    onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
-                    onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
-                    onExport={handleExport}
-                    onViewDetails={(profile) => handleViewProfileDetails(profile)}
-                    isUpdating={false}
-                  />
+                  // Performance optimization: Show loading indicator while fetching all profiles
+                  isProfilesTabLoading ? (
+                    <div className="min-h-[400px] flex items-center justify-center bg-white rounded-xl shadow-lg border border-gray-100">
+                      <div className="text-center">
+                        <Loader2 className="w-12 h-12 animate-spin text-blue-600 mx-auto mb-4" />
+                        <div className="text-gray-600 text-lg font-medium">Loading all profiles...</div>
+                        <div className="text-gray-500 text-sm mt-2">This may take a moment</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <DataTable
+                      profiles={profiles}
+                      onUpdateProfile={handleUpdateProfile}
+                      onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+                      onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
+                      onExport={handleExport}
+                      onViewDetails={(profile) => handleViewProfileDetails(profile)}
+                      isUpdating={false}
+                    />
+                  )
                 )}
               </>
             )}
