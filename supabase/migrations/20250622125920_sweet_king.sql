@@ -145,17 +145,45 @@ CREATE POLICY "Users can manage own scraping jobs"
 -- Function to handle new user registration
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$
+DECLARE
+  _username text;
+  _full_name text;
+  _first_name text;
+  _last_name text;
 BEGIN
+  -- Extract values from raw_user_meta_data safely
+  IF NEW.raw_user_meta_data IS NOT NULL THEN
+    _username := NEW.raw_user_meta_data->>'username';
+    _full_name := NEW.raw_user_meta_data->>'full_name';
+    _first_name := NEW.raw_user_meta_data->>'first_name';
+    _last_name := NEW.raw_user_meta_data->>'last_name';
+  END IF;
+
+  -- Determine final username
+  IF _username IS NULL OR _username = '' THEN
+    _username := split_part(NEW.email, '@', 1) || '-' || substring(NEW.id::text from 1 for 8);
+  END IF;
+
+  -- Determine final full_name
+  IF _full_name IS NULL OR _full_name = '' THEN
+    IF _first_name IS NOT NULL AND _last_name IS NOT NULL THEN
+      _full_name := _first_name || ' ' || _last_name;
+    ELSE
+      _full_name := NULL; -- Or some default if both are missing
+    END IF;
+  END IF;
+
   INSERT INTO public.users (auth_user_id, username, email, full_name)
   VALUES (
     NEW.id,
-   COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1) || '-' || substring(NEW.id::text from 1 for 8)),
+    _username,
     NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'first_name' || ' ' || NEW.raw_user_meta_data->>'last_name')
+    _full_name
   );
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
 
 -- Trigger to automatically create user profile on signup
 DO $$ BEGIN
