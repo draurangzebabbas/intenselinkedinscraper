@@ -12,6 +12,14 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true
+  },
+  db: {
+    schema: 'public'
+  },
+  global: {
+    headers: {
+      'x-my-custom-header': 'linkedin-scraper'
+    }
   }
 })
 
@@ -61,36 +69,55 @@ export interface ScrapingJob {
 
 // Auth helper functions
 export const getCurrentUser = async () => {
-  const { data: { user } } = await supabase.auth.getUser()
-  return user
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser()
+    if (error) {
+      console.error('Error getting current user:', error)
+      return null
+    }
+    return user
+  } catch (error) {
+    console.error('Error getting current user:', error)
+    return null
+  }
 }
 
 export const getUserProfile = async (authUserId: string): Promise<User | null> => {
-  const { data, error } = await supabase
-    .rpc('get_or_create_user_profile', { user_auth_id: authUserId })
-  
-  if (error) {
+  try {
+    const { data, error } = await supabase
+      .rpc('get_or_create_user_profile', { user_auth_id: authUserId })
+    
+    if (error) {
+      console.error('Error getting user profile:', error)
+      return null
+    }
+    
+    return data
+  } catch (error) {
     console.error('Error getting user profile:', error)
     return null
   }
-  
-  return data
 }
 
 // Profile optimization functions
 export const checkProfileExists = async (linkedinUrl: string): Promise<LinkedInProfile | null> => {
-  const { data, error } = await supabase
-    .from('linkedin_profiles')
-    .select('*')
-    .eq('linkedin_url', linkedinUrl)
-    .single()
-  
-  if (error && error.code !== 'PGRST116') {
+  try {
+    const { data, error } = await supabase
+      .from('linkedin_profiles')
+      .select('*')
+      .eq('linkedin_url', linkedinUrl)
+      .single()
+    
+    if (error && error.code !== 'PGRST116') {
+      console.error('Error checking profile:', error)
+      return null
+    }
+    
+    return data
+  } catch (error) {
     console.error('Error checking profile:', error)
     return null
   }
-  
-  return data
 }
 
 export const upsertProfile = async (
@@ -99,53 +126,68 @@ export const upsertProfile = async (
   profileData: any,
   tags: string[] = []
 ): Promise<LinkedInProfile | null> => {
-  const { data, error } = await supabase
-    .from('linkedin_profiles')
-    .upsert({
-      user_id: userId,
-      linkedin_url: linkedinUrl,
-      profile_data: profileData,
-      tags,
-      last_updated: new Date().toISOString()
-    }, {
-      onConflict: 'linkedin_url'
-    })
-    .select()
-    .single()
-  
-  if (error) {
+  try {
+    const { data, error } = await supabase
+      .from('linkedin_profiles')
+      .upsert({
+        user_id: userId,
+        linkedin_url: linkedinUrl,
+        profile_data: profileData,
+        tags,
+        last_updated: new Date().toISOString()
+      }, {
+        onConflict: 'linkedin_url'
+      })
+      .select()
+      .single()
+    
+    if (error) {
+      console.error('Error upserting profile:', error)
+      return null
+    }
+    
+    return data
+  } catch (error) {
     console.error('Error upserting profile:', error)
     return null
   }
-  
-  return data
 }
 
 export const getUserProfiles = async (userId: string): Promise<LinkedInProfile[]> => {
-  const { data, error } = await supabase
-    .from('linkedin_profiles')
-    .select('*')
-    .eq('user_id', userId)
-    .order('last_updated', { ascending: false })
-  
-  if (error) {
+  try {
+    const { data, error } = await supabase
+      .from('linkedin_profiles')
+      .select('*')
+      .eq('user_id', userId)
+      .order('last_updated', { ascending: false })
+    
+    if (error) {
+      console.error('Error getting user profiles:', error)
+      return []
+    }
+    
+    return data || []
+  } catch (error) {
     console.error('Error getting user profiles:', error)
     return []
   }
-  
-  return data || []
 }
 
 export const getAllProfiles = async (): Promise<LinkedInProfile[]> => {
-  const { data, error } = await supabase
-    .from('linkedin_profiles')
-    .select('*')
-    .order('last_updated', { ascending: false })
-  
-  if (error) {
+  try {
+    const { data, error } = await supabase
+      .from('linkedin_profiles')
+      .select('*')
+      .order('last_updated', { ascending: false })
+    
+    if (error) {
+      console.error('Error getting all profiles:', error)
+      return []
+    }
+    
+    return data || []
+  } catch (error) {
     console.error('Error getting all profiles:', error)
     return []
   }
-  
-  return data || []
 }
