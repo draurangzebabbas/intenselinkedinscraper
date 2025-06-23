@@ -25,7 +25,7 @@ import {
   type LinkedInProfile,
   type ScrapingJob
 } from './lib/supabase';
-import { Linkedin, Database, Activity, Key, Clock, Loader2 } from 'lucide-react';
+import { Linkedin, Database, Activity, Key, Clock, Loader2, AlertCircle } from 'lucide-react';
 
 interface CommentData {
   type: string;
@@ -47,6 +47,7 @@ function App() {
   const [user, setUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string>('');
   
   // App state
   const [profiles, setProfiles] = useState<LinkedInProfile[]>([]);
@@ -72,38 +73,102 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Initialize auth listener
+  // Initialize auth listener with comprehensive error handling
   useEffect(() => {
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        setUser(session.user);
-        const profile = await getUserProfile(session.user.id);
-        setUserProfile(profile);
-        if (profile) {
-          await loadUserData(profile.id);
+      try {
+        console.log('Initializing authentication...');
+        setAuthError('');
+        
+        // Check if Supabase environment variables are configured
+        if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
+          throw new Error('Supabase environment variables are not configured. Please check your .env file.');
         }
+
+        // Get current session with timeout
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Session check timed out')), 10000)
+        );
+
+        const { data: { session }, error: sessionError } = await Promise.race([
+          sessionPromise,
+          timeoutPromise
+        ]) as any;
+
+        if (sessionError) {
+          console.error('Session error:', sessionError);
+          throw new Error(`Authentication error: ${sessionError.message}`);
+        }
+
+        if (session?.user) {
+          console.log('User session found, loading profile...');
+          setUser(session.user);
+          
+          try {
+            const profile = await getUserProfile(session.user.id);
+            if (profile) {
+              setUserProfile(profile);
+              await loadUserData(profile.id);
+            } else {
+              console.warn('No user profile found, but user is authenticated');
+              setAuthError('User profile not found. Please try signing out and back in.');
+            }
+          } catch (profileError) {
+            console.error('Error loading user profile:', profileError);
+            setAuthError('Failed to load user profile. Please try refreshing the page.');
+          }
+        } else {
+          console.log('No active session found');
+        }
+        
+      } catch (error) {
+        console.error('Auth initialization error:', error);
+        
+        if (error instanceof Error) {
+          if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
+            setAuthError('Network connection failed. Please check your internet connection and try again.');
+          } else if (error.message.includes('timeout')) {
+            setAuthError('Connection timed out. Please refresh the page and try again.');
+          } else if (error.message.includes('environment variables')) {
+            setAuthError('Application configuration error. Please contact support.');
+          } else {
+            setAuthError(`Authentication failed: ${error.message}`);
+          }
+        } else {
+          setAuthError('An unexpected error occurred during initialization.');
+        }
+      } finally {
+        setIsLoading(false);
       }
-      
-      setIsLoading(false);
     };
 
     initAuth();
 
+    // Set up auth state change listener with error handling
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setUser(session.user);
-        const profile = await getUserProfile(session.user.id);
-        setUserProfile(profile);
-        if (profile) {
-          await loadUserData(profile.id);
+      try {
+        console.log('Auth state changed:', event);
+        setAuthError('');
+
+        if (event === 'SIGNED_IN' && session?.user) {
+          setUser(session.user);
+          const profile = await getUserProfile(session.user.id);
+          setUserProfile(profile);
+          if (profile) {
+            await loadUserData(profile.id);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null);
+          setUserProfile(null);
+          setProfiles([]);
+          setScrapingJobs([]);
+        } else if (event === 'TOKEN_REFRESHED') {
+          console.log('Token refreshed successfully');
         }
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setUserProfile(null);
-        setProfiles([]);
-        setScrapingJobs([]);
+      } catch (error) {
+        console.error('Auth state change error:', error);
+        setAuthError('Authentication state change failed. Please refresh the page.');
       }
     });
 
@@ -113,6 +178,8 @@ function App() {
   // Performance optimization: Load only user's profiles initially
   const loadUserData = async (userId: string) => {
     try {
+      console.log('Loading user data for:', userId);
+      
       // Load user's profiles and jobs initially (not all profiles)
       const [userProfilesData, jobs] = await Promise.all([
         getUserProfiles(userId), // Only fetch user's profiles for faster initial load
@@ -121,25 +188,33 @@ function App() {
       
       setProfiles(userProfilesData); // Set to user's profiles only
       setScrapingJobs(jobs);
+      
+      console.log(`Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
     } catch (error) {
       console.error('Error loading user data:', error);
+      setAuthError('Failed to load user data. Some features may not work properly.');
     }
   };
 
   const loadScrapingJobs = async (userId: string): Promise<ScrapingJob[]> => {
-    const { data, error } = await supabase
-      .from('scraping_jobs')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    
-    if (error) {
+    try {
+      const { data, error } = await supabase
+        .from('scraping_jobs')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      
+      if (error) {
+        console.error('Error loading scraping jobs:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
       console.error('Error loading scraping jobs:', error);
       return [];
     }
-    
-    return data || [];
   };
 
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
@@ -639,12 +714,58 @@ function App() {
     // Auth state will be handled by the auth listener
   };
 
+  // Show error screen if there's a critical auth error
+  if (authError && !user) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-xl shadow-lg border border-gray-100 p-8 text-center">
+          <div className="p-3 bg-red-100 rounded-full w-16 h-16 mx-auto mb-6 flex items-center justify-center">
+            <AlertCircle className="w-8 h-8 text-red-600" />
+          </div>
+          
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Connection Error</h2>
+          <p className="text-gray-600 mb-6">{authError}</p>
+          
+          <div className="space-y-3">
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Refresh Page
+            </button>
+            
+            <button
+              onClick={() => {
+                setAuthError('');
+                setIsLoading(true);
+                // Retry initialization
+                window.location.reload();
+              }}
+              className="w-full px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Try Again
+            </button>
+          </div>
+          
+          <div className="mt-6 text-xs text-gray-500">
+            If this problem persists, please check your internet connection or contact support.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <div className="text-gray-600">Loading...</div>
+          {authError && (
+            <div className="mt-4 text-sm text-amber-600 max-w-md">
+              {authError}
+            </div>
+          )}
         </div>
       </div>
     );
