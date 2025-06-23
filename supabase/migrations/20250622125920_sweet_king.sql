@@ -1,3 +1,20 @@
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Users can read own profile" ON public.users;
+DROP POLICY IF EXISTS "Users can update own profile" ON public.users;
+DROP POLICY IF EXISTS "Users can manage own API keys" ON public.apify_keys;
+DROP POLICY IF EXISTS "Users can read all profiles" ON public.linkedin_profiles;
+DROP POLICY IF EXISTS "Users can insert profiles" ON public.linkedin_profiles;
+DROP POLICY IF EXISTS "Users can update profiles they own" ON public.linkedin_profiles;
+DROP POLICY IF EXISTS "Users can delete profiles they own" ON public.linkedin_profiles;
+DROP POLICY IF EXISTS "Users can manage own scraping jobs" ON public.scraping_jobs;
+
+-- Drop existing trigger if it exists
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+
+-- Drop existing functions if they exist
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.get_or_create_user_profile(uuid);
+
 -- Enable necessary extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -133,7 +150,6 @@ BEGIN
   VALUES (
     NEW.id,
    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1) || '-' || substring(NEW.id::text from 1 for 8)),
-
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'first_name' || ' ' || NEW.raw_user_meta_data->>'last_name')
   );
