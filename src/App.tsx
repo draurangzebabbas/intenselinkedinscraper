@@ -73,7 +73,40 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Initialize auth listener with comprehensive error handling
+  // Helper function to check Supabase connection with retry logic
+  const checkSupabaseConnection = async (retries = 3): Promise<boolean> => {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        console.log(`Checking Supabase connection (attempt ${attempt}/${retries})...`);
+        
+        // Simple health check - try to get session with shorter timeout per attempt
+        const timeoutMs = 15000; // 15 seconds per attempt
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Connection timeout (attempt ${attempt})`)), timeoutMs)
+        );
+
+        await Promise.race([sessionPromise, timeoutPromise]);
+        console.log('Supabase connection successful');
+        return true;
+        
+      } catch (error) {
+        console.warn(`Connection attempt ${attempt} failed:`, error);
+        
+        if (attempt === retries) {
+          throw error;
+        }
+        
+        // Wait before retry (exponential backoff)
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    return false;
+  };
+
+  // Initialize auth listener with comprehensive error handling and retry logic
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -85,16 +118,26 @@ function App() {
           throw new Error('Supabase environment variables are not configured. Please check your .env file.');
         }
 
-        // Get current session with timeout
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Session check timed out')), 10000)
-        );
+        // Validate environment variables format
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+        
+        if (!supabaseUrl.startsWith('https://') || !supabaseUrl.includes('.supabase.co')) {
+          throw new Error('Invalid Supabase URL format. Please check your VITE_SUPABASE_URL in the .env file.');
+        }
+        
+        if (supabaseKey.length < 100) {
+          throw new Error('Invalid Supabase anonymous key format. Please check your VITE_SUPABASE_ANON_KEY in the .env file.');
+        }
 
-        const { data: { session }, error: sessionError } = await Promise.race([
-          sessionPromise,
-          timeoutPromise
-        ]) as any;
+        console.log('Environment variables validated, checking connection...');
+
+        // Check connection with retry logic
+        await checkSupabaseConnection(3);
+
+        // Get current session
+        console.log('Getting current session...');
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
         if (sessionError) {
           console.error('Session error:', sessionError);
@@ -128,10 +171,12 @@ function App() {
         if (error instanceof Error) {
           if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
             setAuthError('Network connection failed. Please check your internet connection and try again.');
-          } else if (error.message.includes('timeout')) {
-            setAuthError('Connection timed out. Please refresh the page and try again.');
-          } else if (error.message.includes('environment variables')) {
-            setAuthError('Application configuration error. Please contact support.');
+          } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
+            setAuthError('Connection to Supabase timed out. This may be due to network issues or your Supabase project being paused. Please check your Supabase dashboard and try again.');
+          } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
+            setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
+          } else if (error.message.includes('CORS')) {
+            setAuthError('Cross-origin request blocked. Please check your Supabase project settings.');
           } else {
             setAuthError(`Authentication failed: ${error.message}`);
           }
@@ -750,6 +795,20 @@ function App() {
           <div className="mt-6 text-xs text-gray-500">
             If this problem persists, please check your internet connection or contact support.
           </div>
+          
+          {/* Additional troubleshooting info */}
+          <details className="mt-4 text-left">
+            <summary className="text-sm text-gray-600 cursor-pointer hover:text-gray-800">
+              Troubleshooting Steps
+            </summary>
+            <div className="mt-2 text-xs text-gray-600 space-y-2">
+              <p>1. Check your .env file contains valid Supabase credentials</p>
+              <p>2. Verify your Supabase project is active (not paused)</p>
+              <p>3. Ensure stable internet connection</p>
+              <p>4. Try disabling browser extensions or VPN</p>
+              <p>5. Check browser console for additional error details</p>
+            </div>
+          </details>
         </div>
       </div>
     );
