@@ -132,7 +132,8 @@ BEGIN
   INSERT INTO public.users (auth_user_id, username, email, full_name)
   VALUES (
     NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)),
+   COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1) || '-' || substring(NEW.id::text from 1 for 8)),
+
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'first_name' || ' ' || NEW.raw_user_meta_data->>'last_name')
   );
