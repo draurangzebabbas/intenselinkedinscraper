@@ -20,19 +20,10 @@ export class ImageStorageService {
       const { data: buckets } = await supabase.storage.listBuckets();
       const bucketExists = buckets?.some(bucket => bucket.name === this.BUCKET_NAME);
 
-      if (!bucketExists) {
-        // Create public bucket for profile images
-        const { error } = await supabase.storage.createBucket(this.BUCKET_NAME, {
-          public: true,
-          allowedMimeTypes: this.ALLOWED_TYPES,
-          fileSizeLimit: this.MAX_FILE_SIZE
-        });
+           if (!bucketExists) {
+        console.warn(`Storage bucket '${this.BUCKET_NAME}' does not exist. Please create it manually in your Supabase dashboard.`);
+      }
 
-        if (error) {
-          console.error('Error creating storage bucket:', error);
-        } else {
-          console.log('Profile images bucket created successfully');
-        }
       }
     } catch (error) {
       console.error('Error initializing storage bucket:', error);
