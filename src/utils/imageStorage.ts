@@ -20,10 +20,8 @@ export class ImageStorageService {
       const { data: buckets } = await supabase.storage.listBuckets();
       const bucketExists = buckets?.some(bucket => bucket.name === this.BUCKET_NAME);
 
-           if (!bucketExists) {
+      if (!bucketExists) {
         console.warn(`Storage bucket '${this.BUCKET_NAME}' does not exist. Please create it manually in your Supabase dashboard.`);
-      }
-
       }
     } catch (error) {
       console.error('Error initializing storage bucket:', error);
