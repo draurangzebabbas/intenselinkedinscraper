@@ -75,40 +75,29 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
-  // Helper function to check Supabase connection with retry logic
-  const checkSupabaseConnection = async (retries = 3): Promise<boolean> => {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        console.log(`Checking Supabase connection (attempt ${attempt}/${retries})...`);
-        
-        // Simple health check - try to get session with shorter timeout per attempt
-        const timeoutMs = 15000; // 15 seconds per attempt
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error(`Connection timeout (attempt ${attempt})`)), timeoutMs)
-        );
-
-        await Promise.race([sessionPromise, timeoutPromise]);
-        console.log('Supabase connection successful');
-        return true;
-        
-      } catch (error) {
-        console.warn(`Connection attempt ${attempt} failed:`, error);
-        
-        if (attempt === retries) {
-          throw error;
-        }
-        
-        // Wait before retry (exponential backoff)
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-        console.log(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+  // Helper function to check Supabase connection with improved error handling
+  const checkSupabaseConnection = async (): Promise<boolean> => {
+    try {
+      console.log('Checking Supabase connection...');
+      
+      // Simple health check with reasonable timeout
+      const { data, error } = await supabase.auth.getSession();
+      
+      if (error) {
+        console.error('Supabase connection error:', error);
+        throw error;
       }
+      
+      console.log('Supabase connection successful');
+      return true;
+      
+    } catch (error) {
+      console.error('Supabase connection failed:', error);
+      throw error;
     }
-    return false;
   };
 
-  // Initialize auth listener with comprehensive error handling and retry logic
+  // Initialize auth listener with improved error handling
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -134,11 +123,16 @@ function App() {
 
         console.log('Environment variables validated, checking connection...');
 
-        // Check connection with retry logic
-        await checkSupabaseConnection(3);
+        // Check connection with improved error handling
+        await checkSupabaseConnection();
 
         // Initialize image storage
-        await ImageStorageService.initializeBucket();
+        try {
+          await ImageStorageService.initializeBucket();
+        } catch (storageError) {
+          console.warn('Image storage initialization failed:', storageError);
+          // Don't fail the entire app if storage init fails
+        }
 
         // Get current session
         console.log('Getting current session...');
@@ -176,12 +170,12 @@ function App() {
         if (error instanceof Error) {
           if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
             setAuthError('Network connection failed. Please check your internet connection and try again.');
-          } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
-            setAuthError('Connection to Supabase timed out. This may be due to network issues or your Supabase project being paused. Please check your Supabase dashboard and try again.');
           } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
             setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
           } else if (error.message.includes('CORS')) {
             setAuthError('Cross-origin request blocked. Please check your Supabase project settings.');
+          } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
+            setAuthError('Connection to Supabase timed out. Please check your Supabase project status and try again.');
           } else {
             setAuthError(`Authentication failed: ${error.message}`);
           }
