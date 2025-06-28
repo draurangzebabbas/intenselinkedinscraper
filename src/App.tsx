@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Auth } from './components/Auth';
 import { ScrapingForm } from './components/ScrapingForm';
 import { DataTable } from './components/DataTable';
@@ -13,7 +13,6 @@ import { JobsTable } from './components/JobsTable';
 import { StorageManager } from './components/StorageManager';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
-import { ImageStorageService } from './utils/imageStorage';
 import { 
   supabase, 
   getCurrentUser, 
@@ -75,33 +74,43 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
+  // Use ref to prevent double initialization
+  const initializationRef = useRef(false);
+
   // Helper function to check Supabase connection with improved error handling
   const checkSupabaseConnection = async (): Promise<boolean> => {
     try {
-      console.log('Checking Supabase connection...');
+      console.log('🔍 Checking Supabase connection...');
       
       // Simple health check with reasonable timeout
       const { data, error } = await supabase.auth.getSession();
       
       if (error) {
-        console.error('Supabase connection error:', error);
+        console.error('❌ Supabase connection error:', error);
         throw error;
       }
       
-      console.log('Supabase connection successful');
+      console.log('✅ Supabase connection successful');
       return true;
       
     } catch (error) {
-      console.error('Supabase connection failed:', error);
+      console.error('❌ Supabase connection failed:', error);
       throw error;
     }
   };
 
   // Initialize auth listener with improved error handling
   useEffect(() => {
+    // Prevent double initialization in React StrictMode
+    if (initializationRef.current) {
+      console.log('⚠️ Skipping duplicate initialization');
+      return;
+    }
+    initializationRef.current = true;
+
     const initAuth = async () => {
       try {
-        console.log('Initializing authentication...');
+        console.log('🚀 Initializing authentication...');
         setAuthError('');
         
         // Check if Supabase environment variables are configured
@@ -121,30 +130,22 @@ function App() {
           throw new Error('Invalid Supabase anonymous key format. Please check your VITE_SUPABASE_ANON_KEY in the .env file.');
         }
 
-        console.log('Environment variables validated, checking connection...');
+        console.log('✅ Environment variables validated, checking connection...');
 
         // Check connection with improved error handling
         await checkSupabaseConnection();
 
-        // Initialize image storage
-        try {
-          await ImageStorageService.initializeBucket();
-        } catch (storageError) {
-          console.warn('Image storage initialization failed:', storageError);
-          // Don't fail the entire app if storage init fails
-        }
-
         // Get current session
-        console.log('Getting current session...');
+        console.log('🔍 Getting current session...');
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
         if (sessionError) {
-          console.error('Session error:', sessionError);
+          console.error('❌ Session error:', sessionError);
           throw new Error(`Authentication error: ${sessionError.message}`);
         }
 
         if (session?.user) {
-          console.log('User session found, loading profile...');
+          console.log('✅ User session found, loading profile...');
           setUser(session.user);
           
           try {
@@ -153,19 +154,19 @@ function App() {
               setUserProfile(profile);
               await loadUserData(profile.id);
             } else {
-              console.warn('No user profile found, but user is authenticated');
+              console.warn('⚠️ No user profile found, but user is authenticated');
               setAuthError('User profile not found. Please try signing out and back in.');
             }
           } catch (profileError) {
-            console.error('Error loading user profile:', profileError);
+            console.error('❌ Error loading user profile:', profileError);
             setAuthError('Failed to load user profile. Please try refreshing the page.');
           }
         } else {
-          console.log('No active session found');
+          console.log('ℹ️ No active session found');
         }
         
       } catch (error) {
-        console.error('Auth initialization error:', error);
+        console.error('❌ Auth initialization error:', error);
         
         if (error instanceof Error) {
           if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
@@ -192,7 +193,7 @@ function App() {
     // Set up auth state change listener with error handling
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       try {
-        console.log('Auth state changed:', event);
+        console.log('🔄 Auth state changed:', event);
         setAuthError('');
 
         if (event === 'SIGNED_IN' && session?.user) {
@@ -208,21 +209,24 @@ function App() {
           setProfiles([]);
           setScrapingJobs([]);
         } else if (event === 'TOKEN_REFRESHED') {
-          console.log('Token refreshed successfully');
+          console.log('🔄 Token refreshed successfully');
         }
       } catch (error) {
-        console.error('Auth state change error:', error);
+        console.error('❌ Auth state change error:', error);
         setAuthError('Authentication state change failed. Please refresh the page.');
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      subscription.unsubscribe();
+      initializationRef.current = false;
+    };
+  }, []); // Empty dependency array to run only once
 
   // Performance optimization: Load only user's profiles initially
   const loadUserData = async (userId: string) => {
     try {
-      console.log('Loading user data for:', userId);
+      console.log('🔍 Loading user data for:', userId);
       
       // Load user's profiles and jobs initially (not all profiles)
       const [userProfilesData, jobs] = await Promise.all([
@@ -233,15 +237,16 @@ function App() {
       setProfiles(userProfilesData); // Set to user's profiles only
       setScrapingJobs(jobs);
       
-      console.log(`Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
+      console.log(`✅ Loaded ${userProfilesData.length} profiles and ${jobs.length} jobs`);
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error('❌ Error loading user data:', error);
       setAuthError('Failed to load user data. Some features may not work properly.');
     }
   };
 
   const loadScrapingJobs = async (userId: string): Promise<ScrapingJob[]> => {
     try {
+      console.log('🔍 Loading scraping jobs for user:', userId);
       const { data, error } = await supabase
         .from('scraping_jobs')
         .select('*')
@@ -250,13 +255,14 @@ function App() {
         .limit(50);
       
       if (error) {
-        console.error('Error loading scraping jobs:', error);
+        console.error('❌ Error loading scraping jobs:', error);
         return [];
       }
       
+      console.log('✅ Loaded', data?.length || 0, 'scraping jobs');
       return data || [];
     } catch (error) {
-      console.error('Error loading scraping jobs:', error);
+      console.error('❌ Error loading scraping jobs:', error);
       return [];
     }
   };
@@ -268,11 +274,14 @@ function App() {
   };
 
   const handleKeySelect = (key: ApifyKey) => {
+    console.log('🔑 API key selected:', key.key_name);
     setSelectedKeyId(key.id);
   };
 
   const createScrapingJob = async (jobType: ScrapingJob['job_type'], inputUrl: string): Promise<string> => {
     if (!userProfile) throw new Error('User not authenticated');
+    
+    console.log('🔍 Creating scraping job:', { jobType, inputUrl });
     
     const { data, error } = await supabase
       .from('scraping_jobs')
@@ -286,7 +295,12 @@ function App() {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error creating scraping job:', error);
+      throw error;
+    }
+    
+    console.log('✅ Scraping job created:', data.id);
     
     // Refresh jobs list
     const updatedJobs = await loadScrapingJobs(userProfile.id);
@@ -297,6 +311,8 @@ function App() {
 
   const updateScrapingJob = async (jobId: string, status: ScrapingJob['status'], resultsCount?: number, errorMessage?: string) => {
     if (!userProfile) return;
+    
+    console.log('🔄 Updating scraping job:', { jobId, status, resultsCount });
     
     const updateData: any = {
       status,
@@ -371,7 +387,7 @@ function App() {
         const profileUrls = Array.isArray(url) ? url : [url];
         const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
         
-        updateLoadingProgress('saving_data', 75, 'Saving profile data with image optimization...');
+        updateLoadingProgress('saving_data', 75, 'Saving profile data...');
         setProfileDetails(profilesData);
         setPreviousView('form');
         setCurrentView('profile-table');
@@ -397,7 +413,7 @@ function App() {
           
           const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
           
-          updateLoadingProgress('saving_data', 85, 'Saving all data with image optimization...');
+          updateLoadingProgress('saving_data', 85, 'Saving all data...');
           setProfileDetails(profilesData);
           setPreviousView('form');
           setCurrentView('profile-table');
@@ -418,7 +434,7 @@ function App() {
       }
 
     } catch (error) {
-      console.error('Scraping error:', error);
+      console.error('❌ Scraping error:', error);
       
       let errorMessage = 'Unknown error occurred';
       if (error instanceof Error) {
@@ -461,9 +477,9 @@ function App() {
       const datasetId = await apifyService.scrapeProfiles(urlsToScrape);
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
-      updateLoadingProgress('scraping_profiles', 70, 'Optimizing and saving new profiles...');
+      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles...');
       
-      // Save new profiles to database with image optimization
+      // Save new profiles to database (image optimization is bypassed)
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           await upsertProfile(userId, profileData.linkedinUrl, profileData);
@@ -507,7 +523,7 @@ function App() {
       const apifyService = createApifyService(keyData.api_key);
       const profilesData = await getProfilesWithOptimization(profileUrls, apifyService, userProfile.id);
       
-      updateLoadingProgress('saving_data', 75, 'Processing profile data with image optimization...');
+      updateLoadingProgress('saving_data', 75, 'Processing profile data...');
       setProfileDetails(profilesData);
       setPreviousView('comments');
       setCurrentView('profile-table');
@@ -525,7 +541,7 @@ function App() {
       }
       
     } catch (error) {
-      console.error('Error scraping selected profiles:', error);
+      console.error('❌ Error scraping selected profiles:', error);
       let errorMessage = 'Unknown error occurred';
       if (error instanceof Error) {
         errorMessage = error.message;
@@ -545,6 +561,8 @@ function App() {
     if (!userProfile) return;
     
     try {
+      console.log('💾 Storing', profilesToStore.length, 'profiles with tags:', tags);
+      
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
           await upsertProfile(userProfile.id, profile.linkedinUrl, profile, tags);
@@ -563,7 +581,7 @@ function App() {
       alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
       
     } catch (error) {
-      console.error('Error storing profiles:', error);
+      console.error('❌ Error storing profiles:', error);
       alert('Error storing profiles. Please try again.');
     }
   };
@@ -601,7 +619,7 @@ function App() {
         alert('Profile updated successfully!');
       }
     } catch (error) {
-      console.error('Error updating profile:', error);
+      console.error('❌ Error updating profile:', error);
       alert('Error updating profile. Please try again.');
     }
   };
@@ -637,7 +655,7 @@ function App() {
       }
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
-      console.error('Error updating profiles:', error);
+      console.error('❌ Error updating profiles:', error);
       alert('Error updating profiles. Please try again.');
     }
   };
@@ -664,7 +682,7 @@ function App() {
       
       alert(`Successfully deleted ${profileIds.length} profiles`);
     } catch (error) {
-      console.error('Error deleting profiles:', error);
+      console.error('❌ Error deleting profiles:', error);
       alert('Error deleting profiles. Please try again.');
     }
   };
@@ -730,7 +748,7 @@ function App() {
         const allProfilesData = await getAllProfiles();
         setProfiles(allProfilesData);
       } catch (error) {
-        console.error('Error loading all profiles:', error);
+        console.error('❌ Error loading all profiles:', error);
       } finally {
         setIsProfilesTabLoading(false);
       }
@@ -742,7 +760,7 @@ function App() {
           const userProfilesData = await getUserProfiles(userProfile.id);
           setProfiles(userProfilesData);
         } catch (error) {
-          console.error('Error loading user profiles:', error);
+          console.error('❌ Error loading user profiles:', error);
         }
       }
     } else if (tab === 'jobs') {
