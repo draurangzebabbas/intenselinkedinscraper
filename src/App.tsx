@@ -76,14 +76,22 @@ function App() {
 
   // Use ref to prevent double initialization
   const initializationRef = useRef(false);
+  const initTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper function to check Supabase connection with improved error handling
+  // Helper function to check Supabase connection with timeout
   const checkSupabaseConnection = async (): Promise<boolean> => {
     try {
       console.log('🔍 Checking Supabase connection...');
       
-      // Simple health check with reasonable timeout
-      const { data, error } = await supabase.auth.getSession();
+      // Create a promise that rejects after 10 seconds
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Connection timeout')), 10000);
+      });
+      
+      // Race between the actual request and timeout
+      const connectionPromise = supabase.auth.getSession();
+      
+      const { data, error } = await Promise.race([connectionPromise, timeoutPromise]) as any;
       
       if (error) {
         console.error('❌ Supabase connection error:', error);
@@ -99,7 +107,7 @@ function App() {
     }
   };
 
-  // Initialize auth listener with improved error handling
+  // Initialize auth listener with improved error handling and timeout
   useEffect(() => {
     // Prevent double initialization in React StrictMode
     if (initializationRef.current) {
@@ -112,6 +120,7 @@ function App() {
       try {
         console.log('🚀 Initializing authentication...');
         setAuthError('');
+        setIsLoading(true);
         
         // Check if Supabase environment variables are configured
         if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KEY) {
@@ -132,12 +141,18 @@ function App() {
 
         console.log('✅ Environment variables validated, checking connection...');
 
-        // Check connection with improved error handling
+        // Check connection with timeout
         await checkSupabaseConnection();
 
-        // Get current session
+        // Get current session with timeout
         console.log('🔍 Getting current session...');
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Session timeout')), 8000);
+        });
+        
+        const { data: { session }, error: sessionError } = await Promise.race([sessionPromise, timeoutPromise]) as any;
 
         if (sessionError) {
           console.error('❌ Session error:', sessionError);
@@ -169,14 +184,12 @@ function App() {
         console.error('❌ Auth initialization error:', error);
         
         if (error instanceof Error) {
-          if (error.message.includes('Failed to fetch') || error.message.includes('network')) {
+          if (error.message.includes('Failed to fetch') || error.message.includes('network') || error.message.includes('timeout')) {
             setAuthError('Network connection failed. Please check your internet connection and try again.');
           } else if (error.message.includes('environment variables') || error.message.includes('Invalid Supabase')) {
             setAuthError('Application configuration error. Please ensure your .env file contains valid Supabase credentials.');
           } else if (error.message.includes('CORS')) {
             setAuthError('Cross-origin request blocked. Please check your Supabase project settings.');
-          } else if (error.message.includes('timeout') || error.message.includes('Connection timeout')) {
-            setAuthError('Connection to Supabase timed out. Please check your Supabase project status and try again.');
           } else {
             setAuthError(`Authentication failed: ${error.message}`);
           }
@@ -185,8 +198,16 @@ function App() {
         }
       } finally {
         setIsLoading(false);
+        console.log('🏁 Auth initialization completed');
       }
     };
+
+    // Set a maximum timeout for the entire initialization process
+    initTimeoutRef.current = setTimeout(() => {
+      console.error('❌ Initialization timeout - forcing completion');
+      setIsLoading(false);
+      setAuthError('Application initialization timed out. Please refresh the page.');
+    }, 15000); // 15 second timeout
 
     initAuth();
 
@@ -220,6 +241,9 @@ function App() {
     return () => {
       subscription.unsubscribe();
       initializationRef.current = false;
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+      }
     };
   }, []); // Empty dependency array to run only once
 
@@ -838,7 +862,8 @@ function App() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <div className="text-gray-600">Loading...</div>
+          <div className="text-gray-600 text-lg font-medium">Loading Application...</div>
+          <div className="text-gray-500 text-sm mt-2">Connecting to services...</div>
           {authError && (
             <div className="mt-4 text-sm text-amber-600 max-w-md">
               {authError}
