@@ -25,19 +25,26 @@ export interface LinkedInComment {
 async function apifyFetchWithRetry(url: string, options: RequestInit = {}, retries = 3): Promise<Response> {
   for (let i = 0; i < retries; i++) {
     try {
+      console.log(`🔍 Apify API call attempt ${i + 1}/${retries}:`, url);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000);
       
+      const startTime = Date.now();
       const response = await fetch(url, {
         ...options,
         signal: controller.signal,
       });
       
       clearTimeout(timeoutId);
+      const endTime = Date.now();
+      console.log(`⏱️ Apify API call took ${endTime - startTime}ms`);
       
       if (response.ok) {
+        console.log('✅ Apify API call successful');
         return response;
       }
+      
+      console.error(`❌ Apify API error ${response.status}: ${response.statusText}`);
       
       if (response.status >= 400 && response.status < 500) {
         throw new Error(`Apify API error ${response.status}: ${response.statusText}`);
@@ -48,6 +55,8 @@ async function apifyFetchWithRetry(url: string, options: RequestInit = {}, retri
       }
       
     } catch (error) {
+      console.error(`❌ Apify API call attempt ${i + 1} failed:`, error);
+      
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           if (i === retries - 1) {
@@ -63,7 +72,9 @@ async function apifyFetchWithRetry(url: string, options: RequestInit = {}, retri
       }
       
       if (i < retries - 1) {
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+        const delay = Math.pow(2, i) * 1000;
+        console.log(`⏳ Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
@@ -74,6 +85,8 @@ async function apifyFetchWithRetry(url: string, options: RequestInit = {}, retri
 export const createApifyService = (apiKey: string) => ({
   async scrapePostComments(postUrl: string): Promise<string> {
     try {
+      console.log('🔍 Starting post comments scraping for:', postUrl);
+      
       const response = await apifyFetchWithRetry(`https://api.apify.com/v2/acts/ZI6ykbLlGS3APaPE8/runs`, {
         method: 'POST',
         headers: {
@@ -86,12 +99,14 @@ export const createApifyService = (apiKey: string) => ({
       });
 
       const result: ApifyRunResponse = await response.json();
+      console.log('✅ Post comments scraping started, run ID:', result.data.id);
       
       await this.waitForRunCompletion(result.data.id);
       
+      console.log('✅ Post comments scraping completed, dataset ID:', result.data.defaultDatasetId);
       return result.data.defaultDatasetId;
     } catch (error) {
-      console.error('Error scraping post comments:', error);
+      console.error('❌ Error scraping post comments:', error);
       if (error instanceof Error) {
         throw new Error(`Failed to scrape post comments: ${error.message}`);
       }
@@ -101,6 +116,8 @@ export const createApifyService = (apiKey: string) => ({
 
   async scrapeProfiles(profileUrls: string[]): Promise<string> {
     try {
+      console.log('🔍 Starting profile scraping for', profileUrls.length, 'profiles');
+      
       const response = await apifyFetchWithRetry(`https://api.apify.com/v2/acts/2SyF0bVxmgGr8IVCZ/runs`, {
         method: 'POST',
         headers: {
@@ -113,12 +130,14 @@ export const createApifyService = (apiKey: string) => ({
       });
 
       const result: ApifyRunResponse = await response.json();
+      console.log('✅ Profile scraping started, run ID:', result.data.id);
       
       await this.waitForRunCompletion(result.data.id);
       
+      console.log('✅ Profile scraping completed, dataset ID:', result.data.defaultDatasetId);
       return result.data.defaultDatasetId;
     } catch (error) {
-      console.error('Error scraping profiles:', error);
+      console.error('❌ Error scraping profiles:', error);
       if (error instanceof Error) {
         throw new Error(`Failed to scrape profiles: ${error.message}`);
       }
@@ -131,11 +150,15 @@ export const createApifyService = (apiKey: string) => ({
     const pollInterval = 5000;
     const startTime = Date.now();
 
+    console.log('⏳ Waiting for Apify run completion:', runId);
+
     while (Date.now() - startTime < maxWaitTime) {
       try {
         const status = await this.checkRunStatus(runId);
+        console.log('📊 Run status:', status);
         
         if (status === 'SUCCEEDED') {
+          console.log('✅ Apify run completed successfully');
           return;
         } else if (status === 'FAILED' || status === 'ABORTED') {
           throw new Error(`Apify run ${status.toLowerCase()}`);
@@ -143,7 +166,7 @@ export const createApifyService = (apiKey: string) => ({
         
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       } catch (error) {
-        console.error('Error checking run status:', error);
+        console.error('❌ Error checking run status:', error);
         if (Date.now() - startTime >= maxWaitTime - pollInterval) {
           throw error;
         }
@@ -156,15 +179,19 @@ export const createApifyService = (apiKey: string) => ({
 
   async getDatasetItems(datasetId: string): Promise<any[]> {
     try {
+      console.log('🔍 Fetching dataset items for:', datasetId);
+      
       const response = await apifyFetchWithRetry(`https://api.apify.com/v2/datasets/${datasetId}/items`, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
         },
       });
 
-      return await response.json();
+      const data = await response.json();
+      console.log('✅ Retrieved', data?.length || 0, 'dataset items');
+      return data;
     } catch (error) {
-      console.error('Error fetching dataset items:', error);
+      console.error('❌ Error fetching dataset items:', error);
       if (error instanceof Error) {
         throw new Error(`Failed to fetch dataset items: ${error.message}`);
       }
@@ -183,7 +210,7 @@ export const createApifyService = (apiKey: string) => ({
       const result = await response.json();
       return result.data.status;
     } catch (error) {
-      console.error('Error checking run status:', error);
+      console.error('❌ Error checking run status:', error);
       if (error instanceof Error) {
         throw new Error(`Failed to check run status: ${error.message}`);
       }

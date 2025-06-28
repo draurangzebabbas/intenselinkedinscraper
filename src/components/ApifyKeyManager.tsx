@@ -31,6 +31,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
 
   const loadKeys = async () => {
     try {
+      console.log('🔍 Loading API keys for user:', userId);
       setError('');
       const { data, error } = await supabase
         .from('apify_keys')
@@ -39,11 +40,18 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error loading API keys:', error);
+        console.error('❌ Error loading API keys:', error);
+        console.error('❌ Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
         setError(`Failed to load API keys: ${error.message}`);
         return;
       }
 
+      console.log('✅ Loaded', data?.length || 0, 'API keys');
       setKeys(data || []);
 
       // Auto-select first active key if none selected
@@ -52,7 +60,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
         onKeySelect(activeKey);
       }
     } catch (error) {
-      console.error('Error loading API keys:', error);
+      console.error('❌ Critical error loading API keys:', error);
       setError('Failed to load API keys. Please try again.');
     }
   };
@@ -80,46 +88,84 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
   const saveKey = async () => {
     if (!validateForm()) return;
 
+    console.log('🔍 Starting to save API key...');
+    console.log('📊 Form data:', { 
+      key_name: formData.key_name, 
+      api_key: formData.api_key.substring(0, 10) + '...' // Log only first 10 chars for security
+    });
+
     setIsLoading(true);
     setError('');
     setSuccess('');
 
     try {
       if (editingKey) {
-        // Update existing key
+        console.log('🔄 Updating existing API key:', editingKey.id);
+        
+        const updateData = {
+          key_name: formData.key_name.trim(),
+          api_key: formData.api_key.trim(),
+          updated_at: new Date().toISOString()
+        };
+        
+        console.log('📤 Sending update request...');
+        const startTime = Date.now();
+        
         const { data, error } = await supabase
           .from('apify_keys')
-          .update({
-            key_name: formData.key_name.trim(),
-            api_key: formData.api_key.trim(),
-            updated_at: new Date().toISOString()
-          })
+          .update(updateData)
           .eq('id', editingKey.id)
           .select()
           .single();
 
+        const endTime = Date.now();
+        console.log(`⏱️ Update request took ${endTime - startTime}ms`);
+
         if (error) {
-          console.error('Error updating API key:', error);
+          console.error('❌ Error updating API key:', error);
+          console.error('❌ Error details:', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          });
           setError(`Failed to update API key: ${error.message}`);
           return;
         }
 
+        console.log('✅ API key updated successfully:', data.id);
         setKeys(prev => prev.map(k => k.id === editingKey.id ? data : k));
         setSuccess('API key updated successfully!');
       } else {
-        // Create new key
+        console.log('➕ Creating new API key...');
+        
+        const insertData = {
+          user_id: userId,
+          key_name: formData.key_name.trim(),
+          api_key: formData.api_key.trim()
+        };
+        
+        console.log('📤 Sending insert request...');
+        const startTime = Date.now();
+        
         const { data, error } = await supabase
           .from('apify_keys')
-          .insert([{
-            user_id: userId,
-            key_name: formData.key_name.trim(),
-            api_key: formData.api_key.trim()
-          }])
+          .insert([insertData])
           .select()
           .single();
 
+        const endTime = Date.now();
+        console.log(`⏱️ Insert request took ${endTime - startTime}ms`);
+
         if (error) {
-          console.error('Error creating API key:', error);
+          console.error('❌ Error creating API key:', error);
+          console.error('❌ Error details:', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint
+          });
+          
           if (error.code === '23505') {
             setError('A key with this name already exists. Please choose a different name.');
           } else {
@@ -128,6 +174,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
           return;
         }
 
+        console.log('✅ API key created successfully:', data.id);
         setKeys(prev => [data, ...prev]);
         setSuccess('API key created successfully!');
         
@@ -144,10 +191,14 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
       setTimeout(() => setSuccess(''), 3000);
 
     } catch (error) {
-      console.error('Error saving API key:', error);
+      console.error('❌ Critical error saving API key:', error);
+      if (error instanceof Error) {
+        console.error('❌ Error stack:', error.stack);
+      }
       setError('An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
+      console.log('🏁 Save operation completed');
     }
   };
 
@@ -155,18 +206,31 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
     if (!confirm('Are you sure you want to delete this API key?')) return;
 
     try {
+      console.log('🗑️ Deleting API key:', keyId);
       setError('');
+      
+      const startTime = Date.now();
       const { error } = await supabase
         .from('apify_keys')
         .delete()
         .eq('id', keyId);
 
+      const endTime = Date.now();
+      console.log(`⏱️ Delete request took ${endTime - startTime}ms`);
+
       if (error) {
-        console.error('Error deleting API key:', error);
+        console.error('❌ Error deleting API key:', error);
+        console.error('❌ Error details:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
         setError(`Failed to delete API key: ${error.message}`);
         return;
       }
       
+      console.log('✅ API key deleted successfully');
       setKeys(prev => prev.filter(k => k.id !== keyId));
       setSuccess('API key deleted successfully!');
       
@@ -182,7 +246,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
       setTimeout(() => setSuccess(''), 3000);
 
     } catch (error) {
-      console.error('Error deleting API key:', error);
+      console.error('❌ Critical error deleting API key:', error);
       setError('Failed to delete API key. Please try again.');
     }
   };
@@ -212,6 +276,7 @@ export const ApifyKeyManager: React.FC<ApifyKeyManagerProps> = ({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('📝 Form submitted');
     saveKey();
   };
 

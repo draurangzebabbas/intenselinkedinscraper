@@ -70,31 +70,35 @@ export interface ScrapingJob {
 // Auth helper functions
 export const getCurrentUser = async () => {
   try {
+    console.log('🔍 Getting current user...');
     const { data: { user }, error } = await supabase.auth.getUser()
     if (error) {
-      console.error('Error getting current user:', error)
+      console.error('❌ Error getting current user:', error)
       return null
     }
+    console.log('✅ Current user retrieved:', user?.id);
     return user
   } catch (error) {
-    console.error('Error getting current user:', error)
+    console.error('❌ Error getting current user:', error)
     return null
   }
 }
 
 export const getUserProfile = async (authUserId: string): Promise<User | null> => {
   try {
+    console.log('🔍 Getting user profile for auth user ID:', authUserId);
     const { data, error } = await supabase
       .rpc('get_or_create_user_profile', { user_auth_id: authUserId })
     
     if (error) {
-      console.error('Error getting user profile:', error)
+      console.error('❌ Error getting user profile:', error)
       return null
     }
     
+    console.log('✅ User profile retrieved:', data?.id);
     return data
   } catch (error) {
-    console.error('Error getting user profile:', error)
+    console.error('❌ Error getting user profile:', error)
     return null
   }
 }
@@ -102,6 +106,7 @@ export const getUserProfile = async (authUserId: string): Promise<User | null> =
 // Profile optimization functions
 export const checkProfileExists = async (linkedinUrl: string): Promise<LinkedInProfile | null> => {
   try {
+    console.log('🔍 Checking if profile exists:', linkedinUrl);
     const { data, error } = await supabase
       .from('linkedin_profiles')
       .select('*')
@@ -109,13 +114,14 @@ export const checkProfileExists = async (linkedinUrl: string): Promise<LinkedInP
       .single()
     
     if (error && error.code !== 'PGRST116') {
-      console.error('Error checking profile:', error)
+      console.error('❌ Error checking profile:', error)
       return null
     }
     
+    console.log('✅ Profile check result:', data ? 'exists' : 'not found');
     return data
   } catch (error) {
-    console.error('Error checking profile:', error)
+    console.error('❌ Error checking profile:', error)
     return null
   }
 }
@@ -127,15 +133,38 @@ export const upsertProfile = async (
   tags: string[] = []
 ): Promise<LinkedInProfile | null> => {
   try {
-    // Import image storage service
-    const { ImageStorageService } = await import('../utils/imageStorage');
+    console.log('🔍 Starting profile upsert for user:', userId, 'URL:', linkedinUrl);
+    console.log('📊 Profile data size:', JSON.stringify(profileData).length, 'characters');
     
-    // Optimize images before storing
-    const optimizedProfileData = await ImageStorageService.optimizeProfileImages(
-      profileData, 
-      `${userId}-${Date.now()}`
-    );
+    // TEMPORARILY BYPASS IMAGE OPTIMIZATION FOR DEBUGGING
+    const BYPASS_IMAGE_OPTIMIZATION = true;
+    
+    let optimizedProfileData = profileData;
+    
+    if (!BYPASS_IMAGE_OPTIMIZATION) {
+      console.log('🖼️ Starting image optimization...');
+      try {
+        // Import image storage service
+        const { ImageStorageService } = await import('../utils/imageStorage');
+        
+        // Optimize images before storing
+        optimizedProfileData = await ImageStorageService.optimizeProfileImages(
+          profileData, 
+          `${userId}-${Date.now()}`
+        );
+        console.log('✅ Image optimization completed');
+      } catch (imageError) {
+        console.error('❌ Image optimization failed:', imageError);
+        // Continue with original data if image optimization fails
+        optimizedProfileData = profileData;
+      }
+    } else {
+      console.log('⚠️ Image optimization bypassed for debugging');
+    }
 
+    console.log('💾 Starting database upsert...');
+    const startTime = Date.now();
+    
     const { data, error } = await supabase
       .from('linkedin_profiles')
       .upsert({
@@ -150,20 +179,34 @@ export const upsertProfile = async (
       .select()
       .single()
     
+    const endTime = Date.now();
+    console.log(`⏱️ Database upsert took ${endTime - startTime}ms`);
+    
     if (error) {
-      console.error('Error upserting profile:', error)
+      console.error('❌ Database upsert error:', error);
+      console.error('❌ Error details:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
       return null
     }
     
+    console.log('✅ Profile upserted successfully:', data.id);
     return data
   } catch (error) {
-    console.error('Error upserting profile:', error)
+    console.error('❌ Critical error in upsertProfile:', error);
+    if (error instanceof Error) {
+      console.error('❌ Error stack:', error.stack);
+    }
     return null
   }
 }
 
 export const getUserProfiles = async (userId: string): Promise<LinkedInProfile[]> => {
   try {
+    console.log('🔍 Getting profiles for user:', userId);
     const { data, error } = await supabase
       .from('linkedin_profiles')
       .select('*')
@@ -171,32 +214,35 @@ export const getUserProfiles = async (userId: string): Promise<LinkedInProfile[]
       .order('last_updated', { ascending: false })
     
     if (error) {
-      console.error('Error getting user profiles:', error)
+      console.error('❌ Error getting user profiles:', error)
       return []
     }
     
+    console.log('✅ Retrieved', data?.length || 0, 'user profiles');
     return data || []
   } catch (error) {
-    console.error('Error getting user profiles:', error)
+    console.error('❌ Error getting user profiles:', error)
     return []
   }
 }
 
 export const getAllProfiles = async (): Promise<LinkedInProfile[]> => {
   try {
+    console.log('🔍 Getting all profiles...');
     const { data, error } = await supabase
       .from('linkedin_profiles')
       .select('*')
       .order('last_updated', { ascending: false })
     
     if (error) {
-      console.error('Error getting all profiles:', error)
+      console.error('❌ Error getting all profiles:', error)
       return []
     }
     
+    console.log('✅ Retrieved', data?.length || 0, 'total profiles');
     return data || []
   } catch (error) {
-    console.error('Error getting all profiles:', error)
+    console.error('❌ Error getting all profiles:', error)
     return []
   }
 }
