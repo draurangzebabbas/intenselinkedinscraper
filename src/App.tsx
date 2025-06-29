@@ -78,24 +78,32 @@ function App() {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    // Load and merge profiles from local storage and Supabase
+    // FIXED: Load user-specific profiles only
     try {
-      const localProfiles = LocalStorageService.getLocalProfiles();
-      const supabaseProfiles = await SupabaseProfilesService.getAllProfiles();
+      console.log('📊 Loading data for user:', userId);
+      
+      // Get user's local profiles
+      const localProfiles = LocalStorageService.getUserProfiles(userId);
+      console.log('📱 Local profiles for user:', localProfiles.length);
+      
+      // Get user's Supabase profiles
+      const supabaseProfiles = await SupabaseProfilesService.getUserProfiles(userId);
+      console.log('☁️ Supabase profiles for user:', supabaseProfiles.length);
       
       // Merge profiles, prioritizing the most recently updated
       const mergedProfiles = mergeProfiles(localProfiles, supabaseProfiles);
       
-      // Save merged profiles back to local storage
-      LocalStorageService.saveLocalProfiles(mergedProfiles);
+      // Save merged profiles back to user-specific local storage
+      LocalStorageService.saveUserProfiles(userId, mergedProfiles);
       setProfiles(mergedProfiles);
       
-      console.log(`📊 Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles`);
+      console.log(`✅ Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles for user ${userId}`);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
       // Fallback to local profiles only
-      const localProfiles = LocalStorageService.getLocalProfiles();
+      const localProfiles = LocalStorageService.getUserProfiles(userId);
       setProfiles(localProfiles);
+      console.log('⚠️ Fallback: Using local profiles only:', localProfiles.length);
     }
   };
 
@@ -296,10 +304,10 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
     
-    // Check each URL in Supabase individually
+    // FIXED: Check each URL in Supabase for this specific user
     for (const url of profileUrls) {
       try {
-        const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
+        const existingProfile = await SupabaseProfilesService.checkProfileExists(url, currentUser!.id);
         if (existingProfile) {
           results.push(existingProfile.profile_data);
           savedCost++;
@@ -321,15 +329,15 @@ function App() {
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
       
-      // Save new profiles to Supabase and local storage
+      // Save new profiles to Supabase and local storage for this user
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
-            // Save to Supabase (central storage)
+            // Save to Supabase (central storage) for this user
             await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
             
-            // Save to local storage (cache)
-            LocalStorageService.addLocalProfile({
+            // Save to user-specific local storage (cache)
+            LocalStorageService.addUserProfile(currentUser!.id, {
               linkedin_url: profileData.linkedinUrl,
               profile_data: profileData,
               last_updated: new Date().toISOString()
@@ -346,8 +354,8 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
     
-    // Update local profiles cache
-    const updatedProfiles = LocalStorageService.getLocalProfiles();
+    // Update local profiles cache for this user
+    const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
     setProfiles(updatedProfiles);
     
     return results;
@@ -423,15 +431,15 @@ function App() {
     if (!currentUser) return;
     
     try {
-      console.log('💾 Storing', profilesToStore.length, 'profiles with tags:', tags);
+      console.log('💾 Storing', profilesToStore.length, 'profiles with tags:', tags, 'for user:', currentUser.id);
       
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
-          // Save to Supabase
+          // Save to Supabase for this user
           await SupabaseProfilesService.saveProfile(profile, currentUser.id);
           
-          // Save to local storage
-          LocalStorageService.addLocalProfile({
+          // Save to user-specific local storage
+          LocalStorageService.addUserProfile(currentUser.id, {
             linkedin_url: profile.linkedinUrl,
             profile_data: profile,
             tags,
@@ -440,8 +448,8 @@ function App() {
         }
       }
       
-      // Update local profiles
-      const updatedProfiles = LocalStorageService.getLocalProfiles();
+      // Update local profiles for this user
+      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser.id);
       setProfiles(updatedProfiles);
       
       alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
@@ -471,7 +479,7 @@ function App() {
       const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
       
       if (profilesData.length > 0) {
-        // Refresh profiles list
+        // Refresh profiles list for this user
         await loadUserData(currentUser.id);
         alert('Profile updated successfully!');
       }
@@ -499,7 +507,7 @@ function App() {
       const apifyService = createApifyService(selectedKey.apiKey);
       await getProfilesWithOptimization(profileUrls, apifyService);
       
-      // Refresh profiles list
+      // Refresh profiles list for this user
       await loadUserData(currentUser.id);
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
@@ -512,10 +520,17 @@ function App() {
     if (!currentUser) return;
     
     try {
-      // Remove from local storage
-      const currentProfiles = LocalStorageService.getLocalProfiles();
+      // Remove from user-specific local storage
+      const currentProfiles = LocalStorageService.getUserProfiles(currentUser.id);
       const filteredProfiles = currentProfiles.filter(p => !profileIds.includes(p.id));
-      LocalStorageService.saveLocalProfiles(filteredProfiles);
+      LocalStorageService.saveUserProfiles(currentUser.id, filteredProfiles);
+      
+      // Also try to remove from Supabase (for this user only)
+      try {
+        await SupabaseProfilesService.deleteProfiles(profileIds, currentUser.id);
+      } catch (supabaseError) {
+        console.warn('⚠️ Could not delete from Supabase, but removed from local storage:', supabaseError);
+      }
       
       // Update state
       setProfiles(filteredProfiles);
@@ -532,15 +547,19 @@ function App() {
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      // Always load from local storage for profiles tab
-      const localProfiles = LocalStorageService.getLocalProfiles();
-      setProfiles(localProfiles);
-      console.log('📱 Profiles tab: Loaded', localProfiles.length, 'profiles from local storage');
+      // Load user-specific profiles for profiles tab
+      if (currentUser) {
+        const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
+        setProfiles(userProfiles);
+        console.log('📱 Profiles tab: Loaded', userProfiles.length, 'profiles for user', currentUser.id);
+      }
     } else if (tab === 'scraper') {
       setCurrentView('form');
-      // Load local profiles cache for scraper tab
-      const localProfiles = LocalStorageService.getLocalProfiles();
-      setProfiles(localProfiles);
+      // Load user-specific profiles cache for scraper tab
+      if (currentUser) {
+        const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
+        setProfiles(userProfiles);
+      }
     } else if (tab === 'jobs') {
       setCurrentView('form');
     } else if (tab === 'storage') {
@@ -652,7 +671,7 @@ function App() {
                   }`}
                 >
                   <Database className="w-4 h-4 inline mr-2" />
-                  Profiles ({profiles.length})
+                  My Profiles ({profiles.length})
                 </button>
                 <button
                   onClick={() => handleTabChange('jobs')}
@@ -706,6 +725,7 @@ function App() {
                             {currentUser.fullName || currentUser.username}
                           </div>
                           <div className="text-xs text-gray-500 truncate">{currentUser.email}</div>
+                          <div className="text-xs text-blue-600 truncate">User ID: {currentUser.id.substring(0, 8)}...</div>
                         </div>
                       </div>
                     </div>
@@ -773,7 +793,7 @@ function App() {
                           </div>
                           <div>
                             <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                            <div className="text-sm text-gray-600">Local Profiles</div>
+                            <div className="text-sm text-gray-600">My Profiles</div>
                           </div>
                         </div>
                       </div>

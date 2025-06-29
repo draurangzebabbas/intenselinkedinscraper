@@ -163,17 +163,45 @@ export class LocalStorageService {
     return job;
   }
 
-  // Local profiles cache (for quick access)
+  // FIXED: User-specific local profiles cache
+  static getUserProfiles(userId: string): any[] {
+    const profiles = localStorage.getItem(`${this.PROFILES_KEY}_${userId}`);
+    return profiles ? JSON.parse(profiles) : [];
+  }
+
+  static saveUserProfiles(userId: string, profiles: any[]): void {
+    localStorage.setItem(`${this.PROFILES_KEY}_${userId}`, JSON.stringify(profiles));
+  }
+
+  static addUserProfile(userId: string, profile: any): void {
+    const profiles = this.getUserProfiles(userId);
+    const existingIndex = profiles.findIndex(p => p.linkedin_url === profile.linkedin_url);
+    
+    if (existingIndex >= 0) {
+      profiles[existingIndex] = profile;
+    } else {
+      profiles.push(profile);
+    }
+    
+    this.saveUserProfiles(userId, profiles);
+  }
+
+  // DEPRECATED: Use getUserProfiles instead
   static getLocalProfiles(): any[] {
+    console.warn('⚠️ getLocalProfiles() is deprecated. Use getUserProfiles(userId) instead.');
     const profiles = localStorage.getItem(this.PROFILES_KEY);
     return profiles ? JSON.parse(profiles) : [];
   }
 
+  // DEPRECATED: Use saveUserProfiles instead
   static saveLocalProfiles(profiles: any[]): void {
+    console.warn('⚠️ saveLocalProfiles() is deprecated. Use saveUserProfiles(userId, profiles) instead.');
     localStorage.setItem(this.PROFILES_KEY, JSON.stringify(profiles));
   }
 
+  // DEPRECATED: Use addUserProfile instead
   static addLocalProfile(profile: any): void {
+    console.warn('⚠️ addLocalProfile() is deprecated. Use addUserProfile(userId, profile) instead.');
     const profiles = this.getLocalProfiles();
     const existingIndex = profiles.findIndex(p => p.linkedin_url === profile.linkedin_url);
     
@@ -193,5 +221,35 @@ export class LocalStorageService {
     localStorage.removeItem(this.APIFY_KEYS_KEY);
     localStorage.removeItem(this.JOBS_KEY);
     localStorage.removeItem(this.PROFILES_KEY);
+    
+    // Clear user-specific profile caches
+    const keys = Object.keys(localStorage);
+    keys.forEach(key => {
+      if (key.startsWith(this.PROFILES_KEY + '_')) {
+        localStorage.removeItem(key);
+      }
+    });
+  }
+
+  // Clear data for specific user
+  static clearUserData(userId: string): void {
+    // Remove user-specific profiles
+    localStorage.removeItem(`${this.PROFILES_KEY}_${userId}`);
+    
+    // Remove user's API keys
+    const keys = localStorage.getItem(this.APIFY_KEYS_KEY);
+    if (keys) {
+      const allKeys: LocalApifyKey[] = JSON.parse(keys);
+      const filteredKeys = allKeys.filter(k => k.userId !== userId);
+      localStorage.setItem(this.APIFY_KEYS_KEY, JSON.stringify(filteredKeys));
+    }
+    
+    // Remove user's jobs
+    const jobs = localStorage.getItem(this.JOBS_KEY);
+    if (jobs) {
+      const allJobs: LocalJob[] = JSON.parse(jobs);
+      const filteredJobs = allJobs.filter(j => j.userId !== userId);
+      localStorage.setItem(this.JOBS_KEY, JSON.stringify(filteredJobs));
+    }
   }
 }
