@@ -1,11 +1,33 @@
 import { supabase } from './supabase';
 import { ImageStorageService } from '../utils/imageStorage';
 
-// Enhanced Supabase service with proper user isolation
+// Updated interface for the new shared profile model
+export interface GlobalProfile {
+  id: string;
+  linkedin_url: string;
+  profile_data: any;
+  last_updated: string;
+  created_at: string;
+}
+
+export interface UserStoredProfile {
+  id: string;
+  user_id: string;
+  global_profile_id: string;
+  tags: string[];
+  stored_at: string;
+  // Joined data from global_linkedin_profiles
+  global_profile?: GlobalProfile;
+}
+
+// Enhanced Supabase service with shared profile data model
 export class SupabaseProfilesService {
-  static async saveProfile(profileData: any, userId: string): Promise<any | null> {
+  /**
+   * Save a profile to the global profiles table and optionally link it to a user
+   */
+  static async saveProfile(profileData: any, userId: string, tags: string[] = []): Promise<any | null> {
     try {
-      console.log('💾 Saving profile to Supabase for user:', userId, 'URL:', profileData.linkedinUrl);
+      console.log('💾 Saving profile to global storage, URL:', profileData.linkedinUrl);
       
       // Optimize images before saving
       let optimizedProfileData = profileData;
@@ -13,7 +35,7 @@ export class SupabaseProfilesService {
         console.log('🖼️ Starting image optimization...');
         optimizedProfileData = await ImageStorageService.optimizeProfileImages(
           profileData, 
-          `${userId}-${Date.now()}`
+          `global-${Date.now()}`
         );
         console.log('✅ Image optimization completed');
       } catch (imageError) {
@@ -22,37 +44,88 @@ export class SupabaseProfilesService {
         optimizedProfileData = profileData;
       }
       
-      // Include user_id to satisfy the NOT NULL constraint
-      const { data, error } = await supabase
-        .from('linkedin_profiles')
+      // Step 1: Upsert into global_linkedin_profiles
+      const { data: globalProfile, error: globalError } = await supabase
+        .from('global_linkedin_profiles')
         .upsert({
           linkedin_url: optimizedProfileData.linkedinUrl || optimizedProfileData.linkedin_url,
           profile_data: optimizedProfileData,
-          user_id: userId, // This ensures the profile belongs to the specific user
-          last_updated: new Date().toISOString(),
-          tags: [] // Default empty tags
+          last_updated: new Date().toISOString()
         }, {
           onConflict: 'linkedin_url'
         })
         .select()
         .single();
 
-      if (error) {
-        console.error('❌ Error saving profile to Supabase:', error);
+      if (globalError) {
+        console.error('❌ Error saving to global profiles:', globalError);
         return null;
       }
 
-      console.log('✅ Profile saved to Supabase successfully for user:', userId);
-      return data; // Return the complete saved profile object with id
+      console.log('✅ Profile saved to global storage:', globalProfile.id);
+
+      // Step 2: Link to user in user_stored_profiles (if not already linked)
+      const { data: existingLink, error: linkCheckError } = await supabase
+        .from('user_stored_profiles')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('global_profile_id', globalProfile.id)
+        .maybeSingle();
+
+      if (linkCheckError) {
+        console.error('❌ Error checking existing link:', linkCheckError);
+      }
+
+      if (!existingLink) {
+        const { data: userLink, error: linkError } = await supabase
+          .from('user_stored_profiles')
+          .insert({
+            user_id: userId,
+            global_profile_id: globalProfile.id,
+            tags: tags
+          })
+          .select()
+          .single();
+
+        if (linkError) {
+          console.error('❌ Error linking profile to user:', linkError);
+          // Still return the global profile even if linking fails
+        } else {
+          console.log('✅ Profile linked to user:', userId);
+        }
+      } else {
+        // Update tags if profile is already linked
+        const { error: updateError } = await supabase
+          .from('user_stored_profiles')
+          .update({ tags: tags })
+          .eq('id', existingLink.id);
+
+        if (updateError) {
+          console.error('❌ Error updating tags:', updateError);
+        }
+      }
+
+      // Return the global profile with additional metadata
+      return {
+        id: globalProfile.id,
+        linkedin_url: globalProfile.linkedin_url,
+        profile_data: globalProfile.profile_data,
+        last_updated: globalProfile.last_updated,
+        tags: tags
+      };
+
     } catch (error) {
-      console.error('❌ Critical error saving profile to Supabase:', error);
+      console.error('❌ Critical error saving profile:', error);
       return null;
     }
   }
 
-  static async updateProfile(profileData: any, userId: string): Promise<boolean> {
+  /**
+   * Update a profile in the global storage (benefits all users)
+   */
+  static async updateProfile(profileData: any, linkedinUrl: string): Promise<boolean> {
     try {
-      console.log('🔄 Updating profile in Supabase for user:', userId, 'URL:', profileData.linkedinUrl);
+      console.log('🔄 Updating global profile:', linkedinUrl);
       
       // Optimize images before updating
       let optimizedProfileData = profileData;
@@ -60,116 +133,97 @@ export class SupabaseProfilesService {
         console.log('🖼️ Starting image optimization for update...');
         optimizedProfileData = await ImageStorageService.optimizeProfileImages(
           profileData, 
-          `${userId}-${Date.now()}`
+          `global-update-${Date.now()}`
         );
         console.log('✅ Image optimization completed for update');
       } catch (imageError) {
         console.error('❌ Image optimization failed for update:', imageError);
-        // Continue with original data if image optimization fails
         optimizedProfileData = profileData;
       }
       
-      // Only update profiles that belong to this user
       const { error } = await supabase
-        .from('linkedin_profiles')
+        .from('global_linkedin_profiles')
         .update({
           profile_data: optimizedProfileData,
           last_updated: new Date().toISOString()
         })
-        .eq('linkedin_url', optimizedProfileData.linkedinUrl || optimizedProfileData.linkedin_url)
-        .eq('user_id', userId); // Ensure we only update profiles owned by this user
+        .eq('linkedin_url', linkedinUrl);
 
       if (error) {
-        console.error('❌ Error updating profile in Supabase:', error);
+        console.error('❌ Error updating global profile:', error);
         return false;
       }
 
-      console.log('✅ Profile updated in Supabase successfully for user:', userId);
+      console.log('✅ Global profile updated successfully');
       return true;
     } catch (error) {
-      console.error('❌ Critical error updating profile in Supabase:', error);
+      console.error('❌ Critical error updating profile:', error);
       return false;
     }
   }
 
-  static async saveMultipleProfiles(profiles: any[], userId: string): Promise<number> {
-    let savedCount = 0;
-    
-    for (const profile of profiles) {
-      const savedProfile = await this.saveProfile(profile, userId);
-      if (savedProfile) savedCount++;
-      
-      // Small delay to prevent overwhelming the database
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    return savedCount;
-  }
-
-  // FIXED: This should only return profiles for the specific user
+  /**
+   * Get profiles stored by a specific user (with latest global data)
+   */
   static async getUserProfiles(userId: string): Promise<any[]> {
     try {
-      console.log('🔍 Fetching profiles for user from Supabase:', userId);
+      console.log('🔍 Fetching user stored profiles:', userId);
       
       const { data, error } = await supabase
-        .from('linkedin_profiles')
-        .select('*')
-        .eq('user_id', userId) // Only get profiles for this specific user
-        .order('last_updated', { ascending: false });
+        .from('user_stored_profiles')
+        .select(`
+          id,
+          user_id,
+          global_profile_id,
+          tags,
+          stored_at,
+          global_linkedin_profiles (
+            id,
+            linkedin_url,
+            profile_data,
+            last_updated,
+            created_at
+          )
+        `)
+        .eq('user_id', userId)
+        .order('stored_at', { ascending: false });
 
       if (error) {
-        console.error('❌ Error fetching user profiles from Supabase:', error);
+        console.error('❌ Error fetching user profiles:', error);
         return [];
       }
 
-      console.log('✅ Fetched', data?.length || 0, 'profiles for user from Supabase');
-      return data || [];
+      // Transform the data to match the expected format
+      const profiles = data?.map(item => ({
+        id: item.id, // This is the user_stored_profiles.id for deletion
+        linkedin_url: item.global_linkedin_profiles?.linkedin_url,
+        profile_data: item.global_linkedin_profiles?.profile_data,
+        last_updated: item.global_linkedin_profiles?.last_updated,
+        created_at: item.global_linkedin_profiles?.created_at,
+        tags: item.tags || [],
+        global_profile_id: item.global_profile_id
+      })) || [];
+
+      console.log('✅ Fetched', profiles.length, 'user profiles');
+      return profiles;
     } catch (error) {
-      console.error('❌ Critical error fetching user profiles from Supabase:', error);
+      console.error('❌ Critical error fetching user profiles:', error);
       return [];
     }
   }
 
-  // DEPRECATED: This method should not be used in user-specific contexts
-  static async getAllProfiles(): Promise<any[]> {
-    console.warn('⚠️ getAllProfiles() called - this returns ALL profiles from ALL users!');
+  /**
+   * Check if a profile exists in global storage
+   */
+  static async checkProfileExists(linkedinUrl: string): Promise<any | null> {
     try {
-      console.log('🔍 Fetching ALL profiles from Supabase (admin function)...');
-      
-      const { data, error } = await supabase
-        .from('linkedin_profiles')
-        .select('*')
-        .order('last_updated', { ascending: false });
-
-      if (error) {
-        console.error('❌ Error fetching all profiles from Supabase:', error);
-        return [];
-      }
-
-      console.log('✅ Fetched', data?.length || 0, 'total profiles from Supabase');
-      return data || [];
-    } catch (error) {
-      console.error('❌ Critical error fetching all profiles from Supabase:', error);
-      return [];
-    }
-  }
-
-  static async checkProfileExists(linkedinUrl: string, userId?: string): Promise<any | null> {
-    try {
-      // Clean the URL to ensure it's a single URL
       const cleanUrl = linkedinUrl.trim();
       
-      let query = supabase
-        .from('linkedin_profiles')
+      const { data, error } = await supabase
+        .from('global_linkedin_profiles')
         .select('*')
-        .eq('linkedin_url', cleanUrl);
-      
-      // If userId is provided, only check profiles for that user
-      if (userId) {
-        query = query.eq('user_id', userId);
-      }
-      
-      const { data, error } = await query.maybeSingle();
+        .eq('linkedin_url', cleanUrl)
+        .maybeSingle();
 
       if (error) {
         console.error('❌ Error checking profile existence:', error);
@@ -183,27 +237,104 @@ export class SupabaseProfilesService {
     }
   }
 
-  static async deleteProfiles(profileIds: string[], userId: string): Promise<boolean> {
+  /**
+   * Remove profiles from a user's stored list (doesn't delete global data)
+   */
+  static async deleteProfiles(userStoredProfileIds: string[], userId: string): Promise<boolean> {
     try {
-      console.log('🗑️ Deleting profiles from Supabase for user:', userId, 'IDs:', profileIds);
+      console.log('🗑️ Removing profiles from user storage:', userId, 'IDs:', userStoredProfileIds);
       
-      // Only delete profiles that belong to this user
       const { error } = await supabase
-        .from('linkedin_profiles')
+        .from('user_stored_profiles')
         .delete()
-        .in('id', profileIds)
-        .eq('user_id', userId); // Ensure we only delete profiles owned by this user
+        .in('id', userStoredProfileIds)
+        .eq('user_id', userId);
 
       if (error) {
-        console.error('❌ Error deleting profiles from Supabase:', error);
+        console.error('❌ Error removing profiles from user storage:', error);
         return false;
       }
 
-      console.log('✅ Profiles deleted from Supabase successfully for user:', userId);
+      console.log('✅ Profiles removed from user storage successfully');
       return true;
     } catch (error) {
-      console.error('❌ Critical error deleting profiles from Supabase:', error);
+      console.error('❌ Critical error removing profiles:', error);
       return false;
+    }
+  }
+
+  /**
+   * Get all global profiles (admin function - use sparingly)
+   */
+  static async getAllGlobalProfiles(): Promise<any[]> {
+    console.warn('⚠️ getAllGlobalProfiles() called - this returns ALL global profiles!');
+    try {
+      console.log('🔍 Fetching ALL global profiles...');
+      
+      const { data, error } = await supabase
+        .from('global_linkedin_profiles')
+        .select('*')
+        .order('last_updated', { ascending: false });
+
+      if (error) {
+        console.error('❌ Error fetching all global profiles:', error);
+        return [];
+      }
+
+      console.log('✅ Fetched', data?.length || 0, 'total global profiles');
+      return data || [];
+    } catch (error) {
+      console.error('❌ Critical error fetching all global profiles:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Store multiple profiles for a user
+   */
+  static async saveMultipleProfiles(profiles: any[], userId: string, tags: string[] = []): Promise<number> {
+    let savedCount = 0;
+    
+    for (const profile of profiles) {
+      const savedProfile = await this.saveProfile(profile, userId, tags);
+      if (savedProfile) savedCount++;
+      
+      // Small delay to prevent overwhelming the database
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    return savedCount;
+  }
+
+  /**
+   * Get profile statistics
+   */
+  static async getProfileStats(): Promise<{
+    totalGlobalProfiles: number;
+    totalUserStoredProfiles: number;
+    recentlyUpdated: number;
+  }> {
+    try {
+      const [globalCount, userStoredCount, recentCount] = await Promise.all([
+        supabase.from('global_linkedin_profiles').select('id', { count: 'exact', head: true }),
+        supabase.from('user_stored_profiles').select('id', { count: 'exact', head: true }),
+        supabase.from('global_linkedin_profiles')
+          .select('id', { count: 'exact', head: true })
+          .gte('last_updated', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+      ]);
+
+      return {
+        totalGlobalProfiles: globalCount.count || 0,
+        totalUserStoredProfiles: userStoredCount.count || 0,
+        recentlyUpdated: recentCount.count || 0
+      };
+    } catch (error) {
+      console.error('❌ Error getting profile stats:', error);
+      return {
+        totalGlobalProfiles: 0,
+        totalUserStoredProfiles: 0,
+        recentlyUpdated: 0
+      };
     }
   }
 }

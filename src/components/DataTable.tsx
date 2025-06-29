@@ -5,13 +5,15 @@ import {
   GraduationCap, Award, Mail, Phone, Globe, ChevronDown, Tag
 } from 'lucide-react';
 
+// Updated interface for the new shared profile model
 interface Profile {
-  id: string;
+  id: string; // This is the user_stored_profiles.id for deletion
   linkedin_url: string;
   profile_data: any;
-  last_updated: string | null;
-  created_at: string | null;
+  last_updated: string;
+  created_at?: string;
   tags?: string[];
+  global_profile_id?: string; // Reference to global profile
 }
 
 interface DataTableProps {
@@ -216,7 +218,7 @@ export const DataTable: React.FC<DataTableProps> = ({
   const handleBulkDelete = async () => {
     if (onDeleteSelectedProfiles && selectedProfiles.size > 0) {
       const confirmed = window.confirm(
-        `Are you sure you want to delete ${selectedProfiles.size} selected profiles? This action cannot be undone.`
+        `Are you sure you want to remove ${selectedProfiles.size} selected profiles from your collection? This will not delete the global profile data.`
       );
       
       if (confirmed) {
@@ -304,7 +306,7 @@ export const DataTable: React.FC<DataTableProps> = ({
               {data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim()}
             </div>
             <div className="text-sm text-blue-600 hover:underline">
-              <a href={profile.linkedin_url || data.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
+              <a href={profile.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1">
                 <ExternalLink className="w-3 h-3" />
                 View Profile
               </a>
@@ -533,7 +535,7 @@ export const DataTable: React.FC<DataTableProps> = ({
             )}
             
             <button
-              onClick={() => handleSingleProfileUpdate(profile.linkedin_url || data.linkedinUrl, profile.id)}
+              onClick={() => handleSingleProfileUpdate(profile.linkedin_url, profile.id)}
               disabled={isUpdating}
               className="inline-flex items-center gap-1 px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
@@ -553,7 +555,7 @@ export const DataTable: React.FC<DataTableProps> = ({
       <div className="p-6 border-b border-gray-200">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <h3 className="text-xl font-bold text-gray-900">
-            Saved Profiles ({filteredProfiles.length})
+            My Saved Profiles ({filteredProfiles.length})
             {selectedProfiles.size > 0 && (
               <span className="ml-2 text-sm font-normal text-blue-600">
                 ({selectedProfiles.size} selected)
@@ -699,7 +701,7 @@ export const DataTable: React.FC<DataTableProps> = ({
                     className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Delete Selected
+                    Remove Selected
                   </button>
                 )}
                 

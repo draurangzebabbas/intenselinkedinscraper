@@ -78,17 +78,16 @@ function App() {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    // FIXED: Load only user's locally stored profiles (not all Supabase profiles)
     try {
       console.log('📊 Loading data for user:', userId);
       
-      // Get user's local profiles only
-      const localProfiles = LocalStorageService.getUserProfiles(userId);
-      console.log('📱 Local profiles for user:', localProfiles.length);
+      // Load user's stored profiles from Supabase (with latest global data)
+      const userProfiles = await SupabaseProfilesService.getUserProfiles(userId);
+      console.log('🌐 Supabase profiles for user:', userProfiles.length);
       
-      setProfiles(localProfiles);
+      setProfiles(userProfiles);
       
-      console.log(`✅ Loaded ${localProfiles.length} profiles for user ${userId}`);
+      console.log(`✅ Loaded ${userProfiles.length} profiles for user ${userId}`);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
       // Fallback to local profiles only
@@ -272,12 +271,12 @@ function App() {
     const urlsToScrape: string[] = [];
     let savedCost = 0;
     
-    updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
+    updateLoadingProgress('scraping_profiles', 30, 'Checking global database for existing profiles...');
     
-    // FIXED: Check each URL in Supabase for this specific user
+    // Check each URL in global database first
     for (const url of profileUrls) {
       try {
-        const existingProfile = await SupabaseProfilesService.checkProfileExists(url, currentUser!.id);
+        const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
         if (existingProfile) {
           results.push(existingProfile.profile_data);
           savedCost++;
@@ -297,18 +296,14 @@ function App() {
       const datasetId = await apifyService.scrapeProfiles(urlsToScrape);
       const newProfilesData = await apifyService.getDatasetItems(datasetId);
       
-      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
+      updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to global database...');
       
-      // FIXED: Save new profiles to Supabase only (don't add to local storage automatically)
+      // Save new profiles to global database (benefits all users)
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
-            // Save to Supabase (central storage) for this user
-            await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
-            
-            // DO NOT automatically add to local storage here
-            // Only add to local storage when user explicitly stores profiles
-            
+            // Save to global database (don't link to user yet - that happens when they store it)
+            await SupabaseProfilesService.saveProfile(profileData, 'system');
             results.push(profileData);
           } catch (saveError) {
             console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
@@ -319,9 +314,6 @@ function App() {
     }
     
     updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
-    
-    // DO NOT update local profiles cache here
-    // Local profiles should only be updated when user explicitly stores profiles
     
     return results;
   };
@@ -400,25 +392,13 @@ function App() {
       
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
-          // FIXED: Save to Supabase and capture the returned profile object
-          const savedProfile = await SupabaseProfilesService.saveProfile(profile, currentUser.id);
-          
-          if (savedProfile) {
-            // FIXED: Save the complete profile object (with id) to user-specific local storage
-            LocalStorageService.addUserProfile(currentUser.id, {
-              id: savedProfile.id, // Include the unique id from Supabase
-              linkedin_url: savedProfile.linkedin_url,
-              profile_data: savedProfile.profile_data,
-              tags: tags.length > 0 ? tags : savedProfile.tags,
-              last_updated: savedProfile.last_updated
-            });
-          }
+          // Save to global database and link to user
+          await SupabaseProfilesService.saveProfile(profile, currentUser.id, tags);
         }
       }
       
-      // Update local profiles for this user
-      const updatedProfiles = LocalStorageService.getUserProfiles(currentUser.id);
-      setProfiles(updatedProfiles);
+      // Refresh user's stored profiles
+      await loadUserData(currentUser.id);
       
       alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
       
@@ -444,10 +424,16 @@ function App() {
 
     try {
       const apifyService = createApifyService(selectedKey.apiKey);
-      const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
+      
+      // Scrape fresh data
+      const datasetId = await apifyService.scrapeProfiles([profileUrl]);
+      const profilesData = await apifyService.getDatasetItems(datasetId);
       
       if (profilesData.length > 0) {
-        // Refresh profiles list for this user
+        // Update in global database (benefits all users)
+        await SupabaseProfilesService.updateProfile(profilesData[0], profileUrl);
+        
+        // Refresh user's profiles to show updated data
         await loadUserData(currentUser.id);
         alert('Profile updated successfully!');
       }
@@ -473,9 +459,19 @@ function App() {
 
     try {
       const apifyService = createApifyService(selectedKey.apiKey);
-      await getProfilesWithOptimization(profileUrls, apifyService);
       
-      // Refresh profiles list for this user
+      // Scrape fresh data for all profiles
+      const datasetId = await apifyService.scrapeProfiles(profileUrls);
+      const profilesData = await apifyService.getDatasetItems(datasetId);
+      
+      // Update each profile in global database
+      for (const profileData of profilesData) {
+        if (profileData.linkedinUrl) {
+          await SupabaseProfilesService.updateProfile(profileData, profileData.linkedinUrl);
+        }
+      }
+      
+      // Refresh user's profiles to show updated data
       await loadUserData(currentUser.id);
       alert(`Successfully updated ${profileUrls.length} profiles!`);
     } catch (error) {
@@ -488,25 +484,16 @@ function App() {
     if (!currentUser) return;
     
     try {
-      // Remove from user-specific local storage
-      const currentProfiles = LocalStorageService.getUserProfiles(currentUser.id);
-      const filteredProfiles = currentProfiles.filter(p => !profileIds.includes(p.id));
-      LocalStorageService.saveUserProfiles(currentUser.id, filteredProfiles);
+      // Remove from user's stored profiles (doesn't delete global data)
+      await SupabaseProfilesService.deleteProfiles(profileIds, currentUser.id);
       
-      // Also try to remove from Supabase (for this user only)
-      try {
-        await SupabaseProfilesService.deleteProfiles(profileIds, currentUser.id);
-      } catch (supabaseError) {
-        console.warn('⚠️ Could not delete from Supabase, but removed from local storage:', supabaseError);
-      }
+      // Refresh user's profiles
+      await loadUserData(currentUser.id);
       
-      // Update state
-      setProfiles(filteredProfiles);
-      
-      alert(`Successfully deleted ${profileIds.length} profiles`);
+      alert(`Successfully removed ${profileIds.length} profiles from your collection`);
     } catch (error) {
       console.error('❌ Error deleting profiles:', error);
-      alert('Error deleting profiles. Please try again.');
+      alert('Error removing profiles. Please try again.');
     }
   };
 
@@ -515,19 +502,12 @@ function App() {
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      // Load user-specific profiles for profiles tab
+      // Load user's stored profiles for profiles tab
       if (currentUser) {
-        const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
-        setProfiles(userProfiles);
-        console.log('📱 Profiles tab: Loaded', userProfiles.length, 'profiles for user', currentUser.id);
+        await loadUserData(currentUser.id);
       }
     } else if (tab === 'scraper') {
       setCurrentView('form');
-      // Load user-specific profiles cache for scraper tab
-      if (currentUser) {
-        const userProfiles = LocalStorageService.getUserProfiles(currentUser.id);
-        setProfiles(userProfiles);
-      }
     } else if (tab === 'jobs') {
       setCurrentView('form');
     } else if (tab === 'storage') {
