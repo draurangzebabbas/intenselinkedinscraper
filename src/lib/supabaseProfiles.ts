@@ -6,13 +6,15 @@ export class SupabaseProfilesService {
     try {
       console.log('💾 Saving profile to Supabase:', profileData.linkedinUrl);
       
+      // Don't include user_id to avoid foreign key constraint issues
+      // Since we're using local authentication, we'll store profiles without user association
       const { error } = await supabase
         .from('linkedin_profiles')
         .upsert({
-          user_id: userId,
           linkedin_url: profileData.linkedinUrl || profileData.linkedin_url,
           profile_data: profileData,
-          last_updated: new Date().toISOString()
+          last_updated: new Date().toISOString(),
+          tags: [] // Default empty tags
         }, {
           onConflict: 'linkedin_url'
         });
@@ -68,13 +70,16 @@ export class SupabaseProfilesService {
 
   static async checkProfileExists(linkedinUrl: string): Promise<any | null> {
     try {
+      // Clean the URL to ensure it's a single URL
+      const cleanUrl = linkedinUrl.trim();
+      
       const { data, error } = await supabase
         .from('linkedin_profiles')
         .select('*')
-        .eq('linkedin_url', linkedinUrl)
-        .single();
+        .eq('linkedin_url', cleanUrl)
+        .maybeSingle(); // Use maybeSingle() instead of single() to handle no results gracefully
 
-      if (error && error.code !== 'PGRST116') {
+      if (error) {
         console.error('❌ Error checking profile existence:', error);
         return null;
       }

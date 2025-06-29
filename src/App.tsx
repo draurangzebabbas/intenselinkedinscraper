@@ -164,7 +164,11 @@ function App() {
       } else if (type === 'profile_details') {
         updateLoadingProgress('scraping_profiles', 25, 'Checking existing profiles...');
         
-        const profileUrls = Array.isArray(url) ? url : [url];
+        // Parse profile URLs properly - split by newlines and filter empty strings
+        const profileUrls = url.split('\n')
+          .map(u => u.trim())
+          .filter(u => u.length > 0);
+        
         const profilesData = await getProfilesWithOptimization(profileUrls, apifyService);
         
         updateLoadingProgress('saving_data', 75, 'Saving profile data...');
@@ -254,13 +258,19 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 30, 'Checking for existing profiles...');
     
-    // Check each URL in Supabase first
+    // Check each URL in Supabase individually
     for (const url of profileUrls) {
-      const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
-      if (existingProfile) {
-        results.push(existingProfile.profile_data);
-        savedCost++;
-      } else {
+      try {
+        const existingProfile = await SupabaseProfilesService.checkProfileExists(url);
+        if (existingProfile) {
+          results.push(existingProfile.profile_data);
+          savedCost++;
+        } else {
+          urlsToScrape.push(url);
+        }
+      } catch (error) {
+        console.error('❌ Error checking profile existence for', url, ':', error);
+        // If there's an error checking, add to scrape list to be safe
         urlsToScrape.push(url);
       }
     }
@@ -277,7 +287,7 @@ function App() {
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
-            // Save to Supabase (central storage)
+            // Save to Supabase (central storage) - without user_id to avoid foreign key issues
             await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
             
             // Save to local storage (cache)
