@@ -78,26 +78,17 @@ function App() {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    // FIXED: Load user-specific profiles only
+    // FIXED: Load only user's locally stored profiles (not all Supabase profiles)
     try {
       console.log('📊 Loading data for user:', userId);
       
-      // Get user's local profiles
+      // Get user's local profiles only
       const localProfiles = LocalStorageService.getUserProfiles(userId);
       console.log('📱 Local profiles for user:', localProfiles.length);
       
-      // Get user's Supabase profiles
-      const supabaseProfiles = await SupabaseProfilesService.getUserProfiles(userId);
-      console.log('☁️ Supabase profiles for user:', supabaseProfiles.length);
+      setProfiles(localProfiles);
       
-      // Merge profiles, prioritizing the most recently updated
-      const mergedProfiles = mergeProfiles(localProfiles, supabaseProfiles);
-      
-      // Save merged profiles back to user-specific local storage
-      LocalStorageService.saveUserProfiles(userId, mergedProfiles);
-      setProfiles(mergedProfiles);
-      
-      console.log(`✅ Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles for user ${userId}`);
+      console.log(`✅ Loaded ${localProfiles.length} profiles for user ${userId}`);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
       // Fallback to local profiles only
@@ -105,27 +96,6 @@ function App() {
       setProfiles(localProfiles);
       console.log('⚠️ Fallback: Using local profiles only:', localProfiles.length);
     }
-  };
-
-  const mergeProfiles = (localProfiles: any[], supabaseProfiles: any[]): any[] => {
-    const profileMap = new Map();
-    
-    // Add local profiles first
-    localProfiles.forEach(profile => {
-      profileMap.set(profile.linkedin_url, profile);
-    });
-    
-    // Add or update with Supabase profiles, prioritizing more recent updates
-    supabaseProfiles.forEach(supabaseProfile => {
-      const url = supabaseProfile.linkedin_url;
-      const existing = profileMap.get(url);
-      
-      if (!existing || new Date(supabaseProfile.last_updated) > new Date(existing.last_updated)) {
-        profileMap.set(url, supabaseProfile);
-      }
-    });
-    
-    return Array.from(profileMap.values());
   };
 
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
@@ -329,19 +299,15 @@ function App() {
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles to database...');
       
-      // Save new profiles to Supabase and local storage for this user
+      // FIXED: Save new profiles to Supabase only (don't add to local storage automatically)
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
             // Save to Supabase (central storage) for this user
             await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
             
-            // Save to user-specific local storage (cache)
-            LocalStorageService.addUserProfile(currentUser!.id, {
-              linkedin_url: profileData.linkedinUrl,
-              profile_data: profileData,
-              last_updated: new Date().toISOString()
-            });
+            // DO NOT automatically add to local storage here
+            // Only add to local storage when user explicitly stores profiles
             
             results.push(profileData);
           } catch (saveError) {
@@ -354,9 +320,8 @@ function App() {
     
     updateLoadingProgress('scraping_profiles', 90, `Completed! Saved ${savedCost} API calls by using cached profiles.`);
     
-    // Update local profiles cache for this user
-    const updatedProfiles = LocalStorageService.getUserProfiles(currentUser!.id);
-    setProfiles(updatedProfiles);
+    // DO NOT update local profiles cache here
+    // Local profiles should only be updated when user explicitly stores profiles
     
     return results;
   };
@@ -435,16 +400,19 @@ function App() {
       
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
-          // Save to Supabase for this user
-          await SupabaseProfilesService.saveProfile(profile, currentUser.id);
+          // FIXED: Save to Supabase and capture the returned profile object
+          const savedProfile = await SupabaseProfilesService.saveProfile(profile, currentUser.id);
           
-          // Save to user-specific local storage
-          LocalStorageService.addUserProfile(currentUser.id, {
-            linkedin_url: profile.linkedinUrl,
-            profile_data: profile,
-            tags,
-            last_updated: new Date().toISOString()
-          });
+          if (savedProfile) {
+            // FIXED: Save the complete profile object (with id) to user-specific local storage
+            LocalStorageService.addUserProfile(currentUser.id, {
+              id: savedProfile.id, // Include the unique id from Supabase
+              linkedin_url: savedProfile.linkedin_url,
+              profile_data: savedProfile.profile_data,
+              tags: tags.length > 0 ? tags : savedProfile.tags,
+              last_updated: savedProfile.last_updated
+            });
+          }
         }
       }
       

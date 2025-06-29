@@ -3,7 +3,7 @@ import { ImageStorageService } from '../utils/imageStorage';
 
 // Enhanced Supabase service with proper user isolation
 export class SupabaseProfilesService {
-  static async saveProfile(profileData: any, userId: string): Promise<boolean> {
+  static async saveProfile(profileData: any, userId: string): Promise<any | null> {
     try {
       console.log('💾 Saving profile to Supabase for user:', userId, 'URL:', profileData.linkedinUrl);
       
@@ -23,7 +23,7 @@ export class SupabaseProfilesService {
       }
       
       // Include user_id to satisfy the NOT NULL constraint
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('linkedin_profiles')
         .upsert({
           linkedin_url: optimizedProfileData.linkedinUrl || optimizedProfileData.linkedin_url,
@@ -33,18 +33,20 @@ export class SupabaseProfilesService {
           tags: [] // Default empty tags
         }, {
           onConflict: 'linkedin_url'
-        });
+        })
+        .select()
+        .single();
 
       if (error) {
         console.error('❌ Error saving profile to Supabase:', error);
-        return false;
+        return null;
       }
 
       console.log('✅ Profile saved to Supabase successfully for user:', userId);
-      return true;
+      return data; // Return the complete saved profile object with id
     } catch (error) {
       console.error('❌ Critical error saving profile to Supabase:', error);
-      return false;
+      return null;
     }
   }
 
@@ -94,8 +96,8 @@ export class SupabaseProfilesService {
     let savedCount = 0;
     
     for (const profile of profiles) {
-      const success = await this.saveProfile(profile, userId);
-      if (success) savedCount++;
+      const savedProfile = await this.saveProfile(profile, userId);
+      if (savedProfile) savedCount++;
       
       // Small delay to prevent overwhelming the database
       await new Promise(resolve => setTimeout(resolve, 100));
