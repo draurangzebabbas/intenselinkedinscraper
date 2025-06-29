@@ -353,19 +353,13 @@ function App() {
     
     if (tab === 'profiles') {
       setCurrentView('profiles-list');
-      // Try to load all profiles from Supabase
-      try {
-        const allProfiles = await SupabaseProfilesService.getAllProfiles();
-        setProfiles(allProfiles);
-      } catch (error) {
-        console.error('❌ Error loading all profiles:', error);
-        // Fallback to local profiles
-        const localProfiles = LocalStorageService.getLocalProfiles();
-        setProfiles(localProfiles);
-      }
+      // Always load from local storage for profiles tab
+      const localProfiles = LocalStorageService.getLocalProfiles();
+      setProfiles(localProfiles);
+      console.log('📱 Profiles tab: Loaded', localProfiles.length, 'profiles from local storage');
     } else if (tab === 'scraper') {
       setCurrentView('form');
-      // Load local profiles cache
+      // Load local profiles cache for scraper tab
       const localProfiles = LocalStorageService.getLocalProfiles();
       setProfiles(localProfiles);
     } else if (tab === 'jobs') {
@@ -579,7 +573,7 @@ function App() {
                       </div>
                       <div>
                         <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Cached Profiles</div>
+                        <div className="text-sm text-gray-600">Local Profiles</div>
                       </div>
                     </div>
                   </div>
