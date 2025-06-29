@@ -10,6 +10,7 @@ import { ApifyKeyManager } from './components/ApifyKeyManager';
 import { UserMenu } from './components/UserMenu';
 import { UserProfile } from './components/UserProfile';
 import { JobsTable } from './components/JobsTable';
+import { JobProgressModal } from './components/JobProgressModal';
 import { StorageManager } from './components/StorageManager';
 import { createApifyService } from './lib/apify';
 import { exportData } from './utils/export';
@@ -64,6 +65,10 @@ function App() {
   
   // Performance optimization: Add loading state for profiles tab
   const [isProfilesTabLoading, setIsProfilesTabLoading] = useState(false);
+  
+  // Job progress modal state
+  const [showJobProgressModal, setShowJobProgressModal] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState<string>('');
   
   // Scraping state
   const [isScraping, setIsScraping] = useState(false);
@@ -199,6 +204,12 @@ function App() {
       } finally {
         setIsLoading(false);
         console.log('🏁 Auth initialization completed');
+        
+        // Clear the timeout since initialization is complete
+        if (initTimeoutRef.current) {
+          clearTimeout(initTimeoutRef.current);
+          initTimeoutRef.current = null;
+        }
       }
     };
 
@@ -355,6 +366,37 @@ function App() {
     setScrapingJobs(updatedJobs);
   };
 
+  const handleCancelJob = async (jobId: string) => {
+    try {
+      console.log('🛑 Cancelling job:', jobId);
+      
+      await supabase
+        .from('scraping_jobs')
+        .update({ 
+          status: 'cancelled',
+          error_message: 'Job cancelled by user',
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', jobId);
+      
+      // Refresh jobs list
+      if (userProfile) {
+        const updatedJobs = await loadScrapingJobs(userProfile.id);
+        setScrapingJobs(updatedJobs);
+      }
+      
+      console.log('✅ Job cancelled successfully');
+    } catch (error) {
+      console.error('❌ Error cancelling job:', error);
+      throw error;
+    }
+  };
+
+  const handleViewJobProgress = (jobId: string) => {
+    setSelectedJobId(jobId);
+    setShowJobProgressModal(true);
+  };
+
   const handleScrape = async (type: 'post_comments' | 'profile_details' | 'mixed', url: string) => {
     if (!userProfile) {
       alert('Please sign in to start scraping');
@@ -503,11 +545,17 @@ function App() {
       
       updateLoadingProgress('scraping_profiles', 70, 'Saving new profiles...');
       
-      // Save new profiles to database (image optimization is bypassed)
+      // Save new profiles to database with better error handling
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
-          await upsertProfile(userId, profileData.linkedinUrl, profileData);
-          results.push(profileData);
+          try {
+            await upsertProfile(userId, profileData.linkedinUrl, profileData);
+            results.push(profileData);
+          } catch (saveError) {
+            console.error('❌ Error saving profile:', profileData.linkedinUrl, saveError);
+            // Continue with other profiles even if one fails
+            results.push(profileData); // Still include in results for display
+          }
         }
       }
     }
@@ -802,6 +850,11 @@ function App() {
     // Auth state will be handled by the auth listener
   };
 
+  // Check if scraping is disabled (only disable if current user has a running job)
+  const isScrapingDisabled = () => {
+    return !selectedKeyId; // Only require API key, allow multiple jobs
+  };
+
   // Show error screen if there's a critical auth error
   if (authError && !user) {
     return (
@@ -971,7 +1024,7 @@ function App() {
                     <ScrapingForm 
                       onScrape={handleScrape} 
                       isLoading={isScraping}
-                      disabled={!selectedKeyId}
+                      disabled={isScrapingDisabled()}
                     />
                     
                     {isScraping && (
@@ -1102,11 +1155,23 @@ function App() {
             )}
 
             {activeTab === 'jobs' && (
-              <JobsTable jobs={scrapingJobs} />
+              <JobsTable 
+                jobs={scrapingJobs} 
+                onCancelJob={handleCancelJob}
+                onViewJobProgress={handleViewJobProgress}
+              />
             )}
           </>
         )}
       </main>
+
+      {/* Job Progress Modal */}
+      <JobProgressModal
+        jobId={selectedJobId}
+        isOpen={showJobProgressModal}
+        onClose={() => setShowJobProgressModal(false)}
+        onCancelJob={handleCancelJob}
+      />
     </div>
   );
 }
