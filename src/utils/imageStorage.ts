@@ -10,22 +10,61 @@ export class ImageStorageService {
   private static readonly BUCKET_NAME = 'profile-images';
   private static readonly MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
   private static readonly ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  private static bucketChecked = false;
+  private static bucketExists = false;
+
+  /**
+   * Check if the storage bucket exists and create it if possible
+   */
+  private static async ensureBucketExists(): Promise<boolean> {
+    if (this.bucketChecked) {
+      return this.bucketExists;
+    }
+
+    try {
+      // Check if bucket exists
+      const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+      
+      if (listError) {
+        console.error('Error listing buckets:', listError);
+        this.bucketChecked = true;
+        this.bucketExists = false;
+        return false;
+      }
+
+      const bucketExists = buckets?.some(bucket => bucket.name === this.BUCKET_NAME);
+
+      if (!bucketExists) {
+        console.warn(`⚠️ Storage bucket '${this.BUCKET_NAME}' does not exist.`);
+        console.warn('📝 To enable image storage, please:');
+        console.warn('1. Go to your Supabase Dashboard');
+        console.warn('2. Navigate to Storage section');
+        console.warn('3. Click "New bucket"');
+        console.warn(`4. Create a bucket named "${this.BUCKET_NAME}"`);
+        console.warn('5. Set it to public if you want images to be publicly accessible');
+        
+        this.bucketChecked = true;
+        this.bucketExists = false;
+        return false;
+      }
+
+      this.bucketChecked = true;
+      this.bucketExists = true;
+      return true;
+
+    } catch (error) {
+      console.error('Error checking bucket existence:', error);
+      this.bucketChecked = true;
+      this.bucketExists = false;
+      return false;
+    }
+  }
 
   /**
    * Initialize the storage bucket (call this once during app setup)
    */
   static async initializeBucket(): Promise<void> {
-    try {
-      // Check if bucket exists
-      const { data: buckets } = await supabase.storage.listBuckets();
-      const bucketExists = buckets?.some(bucket => bucket.name === this.BUCKET_NAME);
-
-      if (!bucketExists) {
-        console.warn(`Storage bucket '${this.BUCKET_NAME}' does not exist. Please create it manually in your Supabase dashboard.`);
-      }
-    } catch (error) {
-      console.error('Error initializing storage bucket:', error);
-    }
+    await this.ensureBucketExists();
   }
 
   /**
@@ -41,6 +80,17 @@ export class ImageStorageService {
       // Skip if it's a data URL (base64)
       if (imageUrl.startsWith('data:image/')) {
         return { url: imageUrl, path: fileName };
+      }
+
+      // Check if bucket exists before attempting upload
+      const bucketExists = await this.ensureBucketExists();
+      if (!bucketExists) {
+        console.warn(`⚠️ Skipping image upload - bucket '${this.BUCKET_NAME}' not found`);
+        return { 
+          url: imageUrl, // Return original URL as fallback
+          path: fileName,
+          error: 'Storage bucket not found - using original URL'
+        };
       }
 
       // Fetch the image
@@ -110,6 +160,12 @@ export class ImageStorageService {
    */
   static async uploadImageFile(file: File, fileName: string): Promise<ImageUploadResult> {
     try {
+      // Check if bucket exists before attempting upload
+      const bucketExists = await this.ensureBucketExists();
+      if (!bucketExists) {
+        throw new Error(`Storage bucket '${this.BUCKET_NAME}' not found`);
+      }
+
       // Validate file type
       if (!this.ALLOWED_TYPES.includes(file.type)) {
         throw new Error(`Unsupported image type: ${file.type}`);
@@ -164,6 +220,21 @@ export class ImageStorageService {
     const optimizedProfile = { ...profileData };
     const uploadPromises: Promise<void>[] = [];
 
+    // Check if bucket exists before processing any images
+    const bucketExists = await this.ensureBucketExists();
+    if (!bucketExists) {
+      console.warn('⚠️ Skipping image optimization - storage bucket not available');
+      // Add metadata about skipped optimization
+      optimizedProfile._imageOptimization = {
+        optimizedAt: new Date().toISOString(),
+        totalImages: 0,
+        skipped: true,
+        reason: 'Storage bucket not found',
+        version: '1.0'
+      };
+      return optimizedProfile;
+    }
+
     // Process main profile picture
     if (profileData.profilePic && !profileData.profilePic.startsWith('data:image/') && !profileData.profilePic.includes('.supabase.co/storage/')) {
       uploadPromises.push(
@@ -173,6 +244,9 @@ export class ImageStorageService {
               optimizedProfile.profilePic = result.url;
               optimizedProfile.profilePicStoragePath = result.path;
             }
+          })
+          .catch(error => {
+            console.warn('Failed to optimize profile picture:', error);
           })
       );
     }
@@ -186,6 +260,9 @@ export class ImageStorageService {
               optimizedProfile.profilePicHighQuality = result.url;
               optimizedProfile.profilePicHighQualityStoragePath = result.path;
             }
+          })
+          .catch(error => {
+            console.warn('Failed to optimize high quality profile picture:', error);
           })
       );
     }
@@ -201,6 +278,9 @@ export class ImageStorageService {
                   optimizedProfile.experiences[index].logo = result.url;
                   optimizedProfile.experiences[index].logoStoragePath = result.path;
                 }
+              })
+              .catch(error => {
+                console.warn(`Failed to optimize experience logo ${index}:`, error);
               })
           );
         }
@@ -219,6 +299,9 @@ export class ImageStorageService {
                   optimizedProfile.educations[index].logoStoragePath = result.path;
                 }
               })
+              .catch(error => {
+                console.warn(`Failed to optimize education logo ${index}:`, error);
+              })
           );
         }
       });
@@ -235,6 +318,9 @@ export class ImageStorageService {
                   optimizedProfile.licenseAndCertificates[index].logo = result.url;
                   optimizedProfile.licenseAndCertificates[index].logoStoragePath = result.path;
                 }
+              })
+              .catch(error => {
+                console.warn(`Failed to optimize certificate logo ${index}:`, error);
               })
           );
         }
@@ -259,6 +345,12 @@ export class ImageStorageService {
    */
   static async deleteImage(filePath: string): Promise<boolean> {
     try {
+      const bucketExists = await this.ensureBucketExists();
+      if (!bucketExists) {
+        console.warn('Cannot delete image - bucket not found');
+        return false;
+      }
+
       const { error } = await supabase.storage
         .from(this.BUCKET_NAME)
         .remove([filePath]);
@@ -280,6 +372,12 @@ export class ImageStorageService {
    */
   static async cleanupOrphanedImages(): Promise<number> {
     try {
+      const bucketExists = await this.ensureBucketExists();
+      if (!bucketExists) {
+        console.warn('Cannot cleanup images - bucket not found');
+        return 0;
+      }
+
       // Get all images in storage
       const { data: files, error: listError } = await supabase.storage
         .from(this.BUCKET_NAME)
@@ -292,7 +390,7 @@ export class ImageStorageService {
 
       // Get all profile data to check references
       const { data: profiles, error: profilesError } = await supabase
-        .from('linkedin_profiles')
+        .from('global_linkedin_profiles')
         .select('profile_data');
 
       if (profilesError || !profiles) {
@@ -368,9 +466,7 @@ export class ImageStorageService {
     bucketExists: boolean;
   }> {
     try {
-      // Check if bucket exists
-      const { data: buckets } = await supabase.storage.listBuckets();
-      const bucketExists = buckets?.some(bucket => bucket.name === this.BUCKET_NAME) || false;
+      const bucketExists = await this.ensureBucketExists();
 
       if (!bucketExists) {
         return { totalFiles: 0, totalSize: 0, bucketExists: false };

@@ -29,7 +29,7 @@ export class SupabaseProfilesService {
     try {
       console.log('💾 Saving profile to global storage, URL:', profileData.linkedinUrl);
       
-      // Optimize images before saving
+      // Optimize images before saving (with graceful fallback)
       let optimizedProfileData = profileData;
       try {
         console.log('🖼️ Starting image optimization...');
@@ -59,6 +59,13 @@ export class SupabaseProfilesService {
 
       if (globalError) {
         console.error('❌ Error saving to global profiles:', globalError);
+        
+        // Provide more helpful error messages
+        if (globalError.message.includes('row-level security policy')) {
+          console.error('💡 RLS Policy Issue: The database policy prevents saving profiles.');
+          console.error('💡 Solution: Run the migration to fix RLS policies or check your Supabase RLS settings.');
+        }
+        
         return null;
       }
 
@@ -116,6 +123,16 @@ export class SupabaseProfilesService {
 
     } catch (error) {
       console.error('❌ Critical error saving profile:', error);
+      
+      // Provide more context for common errors
+      if (error instanceof Error) {
+        if (error.message.includes('row-level security')) {
+          console.error('💡 This appears to be an RLS policy issue. Please run the migration to fix database permissions.');
+        } else if (error.message.includes('Bucket not found')) {
+          console.error('💡 Storage bucket missing. Image optimization will be skipped, but profile data will still be saved.');
+        }
+      }
+      
       return null;
     }
   }
@@ -127,7 +144,7 @@ export class SupabaseProfilesService {
     try {
       console.log('🔄 Updating global profile:', linkedinUrl);
       
-      // Optimize images before updating
+      // Optimize images before updating (with graceful fallback)
       let optimizedProfileData = profileData;
       try {
         console.log('🖼️ Starting image optimization for update...');
