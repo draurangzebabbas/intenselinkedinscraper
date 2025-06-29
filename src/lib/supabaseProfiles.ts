@@ -1,5 +1,4 @@
 import { supabase } from './supabase';
-import { ImageStorageService } from '../utils/imageStorage';
 
 // Updated interface for the new shared profile model
 export interface GlobalProfile {
@@ -29,20 +28,9 @@ export class SupabaseProfilesService {
     try {
       console.log('💾 Saving profile to global storage, URL:', profileData.linkedinUrl);
       
-      // Optimize images before saving (with graceful fallback)
-      let optimizedProfileData = profileData;
-      try {
-        console.log('🖼️ Starting image optimization...');
-        optimizedProfileData = await ImageStorageService.optimizeProfileImages(
-          profileData, 
-          `global-${Date.now()}`
-        );
-        console.log('✅ Image optimization completed');
-      } catch (imageError) {
-        console.error('❌ Image optimization failed:', imageError);
-        // Continue with original data if image optimization fails
-        optimizedProfileData = profileData;
-      }
+      // Use profile data directly without image optimization
+      const optimizedProfileData = profileData;
+      console.log('⚠️ Using temporary image links - no storage optimization');
       
       // Step 1: Upsert into global_linkedin_profiles
       const { data: globalProfile, error: globalError } = await supabase
@@ -128,8 +116,6 @@ export class SupabaseProfilesService {
       if (error instanceof Error) {
         if (error.message.includes('row-level security')) {
           console.error('💡 This appears to be an RLS policy issue. Please run the migration to fix database permissions.');
-        } else if (error.message.includes('Bucket not found')) {
-          console.error('💡 Storage bucket missing. Image optimization will be skipped, but profile data will still be saved.');
         }
       }
       
@@ -144,19 +130,9 @@ export class SupabaseProfilesService {
     try {
       console.log('🔄 Updating global profile:', linkedinUrl);
       
-      // Optimize images before updating (with graceful fallback)
-      let optimizedProfileData = profileData;
-      try {
-        console.log('🖼️ Starting image optimization for update...');
-        optimizedProfileData = await ImageStorageService.optimizeProfileImages(
-          profileData, 
-          `global-update-${Date.now()}`
-        );
-        console.log('✅ Image optimization completed for update');
-      } catch (imageError) {
-        console.error('❌ Image optimization failed for update:', imageError);
-        optimizedProfileData = profileData;
-      }
+      // Use profile data directly without image optimization
+      const optimizedProfileData = profileData;
+      console.log('⚠️ Using temporary image links - no storage optimization');
       
       const { error } = await supabase
         .from('global_linkedin_profiles')
