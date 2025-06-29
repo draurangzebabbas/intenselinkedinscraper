@@ -169,40 +169,64 @@ export class SupabaseProfilesService {
     try {
       console.log('🔍 Fetching user stored profiles:', userId);
       
-      const { data, error } = await supabase
+      // First, get the user stored profiles
+      const { data: userStoredProfiles, error: userError } = await supabase
         .from('user_stored_profiles')
-        .select(`
-          id,
-          user_id,
-          global_profile_id,
-          tags,
-          stored_at,
-          global_linkedin_profiles (
-            id,
-            linkedin_url,
-            profile_data,
-            last_updated,
-            created_at
-          )
-        `)
+        .select('id, user_id, global_profile_id, tags, stored_at')
         .eq('user_id', userId)
         .order('stored_at', { ascending: false });
 
-      if (error) {
-        console.error('❌ Error fetching user profiles:', error);
+      if (userError) {
+        console.error('❌ Error fetching user stored profiles:', userError);
         return [];
       }
 
-      // Transform the data to match the expected format
-      const profiles = data?.map(item => ({
-        id: item.id, // This is the user_stored_profiles.id for deletion
-        linkedin_url: item.global_linkedin_profiles?.linkedin_url,
-        profile_data: item.global_linkedin_profiles?.profile_data,
-        last_updated: item.global_linkedin_profiles?.last_updated,
-        created_at: item.global_linkedin_profiles?.created_at,
-        tags: item.tags || [],
-        global_profile_id: item.global_profile_id
-      })) || [];
+      if (!userStoredProfiles || userStoredProfiles.length === 0) {
+        console.log('✅ No stored profiles found for user');
+        return [];
+      }
+
+      // Get the global profile IDs
+      const globalProfileIds = userStoredProfiles
+        .map(profile => profile.global_profile_id)
+        .filter(id => id !== null);
+
+      if (globalProfileIds.length === 0) {
+        console.log('✅ No valid global profile IDs found');
+        return [];
+      }
+
+      // Fetch the corresponding global profiles
+      const { data: globalProfiles, error: globalError } = await supabase
+        .from('global_linkedin_profiles')
+        .select('id, linkedin_url, profile_data, last_updated, created_at')
+        .in('id', globalProfileIds);
+
+      if (globalError) {
+        console.error('❌ Error fetching global profiles:', globalError);
+        return [];
+      }
+
+      // Create a map for quick lookup
+      const globalProfilesMap = new Map();
+      globalProfiles?.forEach(profile => {
+        globalProfilesMap.set(profile.id, profile);
+      });
+
+      // Combine the data
+      const profiles = userStoredProfiles.map(userProfile => {
+        const globalProfile = globalProfilesMap.get(userProfile.global_profile_id);
+        
+        return {
+          id: userProfile.id, // This is the user_stored_profiles.id for deletion
+          linkedin_url: globalProfile?.linkedin_url || '',
+          profile_data: globalProfile?.profile_data || {},
+          last_updated: globalProfile?.last_updated || '',
+          created_at: globalProfile?.created_at || '',
+          tags: userProfile.tags || [],
+          global_profile_id: userProfile.global_profile_id
+        };
+      }).filter(profile => profile.linkedin_url); // Filter out profiles without global data
 
       console.log('✅ Fetched', profiles.length, 'user profiles');
       return profiles;
