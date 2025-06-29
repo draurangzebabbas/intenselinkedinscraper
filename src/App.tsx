@@ -8,6 +8,7 @@ import { ProfileResultsTable } from './components/ProfileResultsTable';
 import { LocalApifyKeyManager } from './components/LocalApifyKeyManager';
 import { LocalJobsTable } from './components/LocalJobsTable';
 import { DataTable } from './components/DataTable';
+import { StorageManager } from './components/StorageManager';
 import { createApifyService } from './lib/apify';
 import { SupabaseProfilesService } from './lib/supabaseProfiles';
 import { LocalStorageService, type LocalUser, type LocalApifyKey, type LocalJob } from './lib/localStorage';
@@ -46,7 +47,7 @@ function App() {
   
   // UI state
   const [activeTab, setActiveTab] = useState<'scraper' | 'profiles' | 'jobs' | 'storage'>('scraper');
-  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details'>('form');
+  const [currentView, setCurrentView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list' | 'single-profile-details' | 'storage'>('form');
   const [previousView, setPreviousView] = useState<'form' | 'comments' | 'profile-details' | 'profile-table' | 'profiles-list'>('form');
   
   // Scraping state
@@ -73,13 +74,50 @@ function App() {
     initApp();
   }, []);
 
-  const loadUserData = (userId: string) => {
+  const loadUserData = async (userId: string) => {
     const jobs = LocalStorageService.getJobs(userId);
     setScrapingJobs(jobs);
     
-    // Load local profiles cache
-    const localProfiles = LocalStorageService.getLocalProfiles();
-    setProfiles(localProfiles);
+    // Load and merge profiles from local storage and Supabase
+    try {
+      const localProfiles = LocalStorageService.getLocalProfiles();
+      const supabaseProfiles = await SupabaseProfilesService.getAllProfiles();
+      
+      // Merge profiles, prioritizing the most recently updated
+      const mergedProfiles = mergeProfiles(localProfiles, supabaseProfiles);
+      
+      // Save merged profiles back to local storage
+      LocalStorageService.saveLocalProfiles(mergedProfiles);
+      setProfiles(mergedProfiles);
+      
+      console.log(`📊 Loaded ${localProfiles.length} local + ${supabaseProfiles.length} Supabase = ${mergedProfiles.length} merged profiles`);
+    } catch (error) {
+      console.error('❌ Error loading user data:', error);
+      // Fallback to local profiles only
+      const localProfiles = LocalStorageService.getLocalProfiles();
+      setProfiles(localProfiles);
+    }
+  };
+
+  const mergeProfiles = (localProfiles: any[], supabaseProfiles: any[]): any[] => {
+    const profileMap = new Map();
+    
+    // Add local profiles first
+    localProfiles.forEach(profile => {
+      profileMap.set(profile.linkedin_url, profile);
+    });
+    
+    // Add or update with Supabase profiles, prioritizing more recent updates
+    supabaseProfiles.forEach(supabaseProfile => {
+      const url = supabaseProfile.linkedin_url;
+      const existing = profileMap.get(url);
+      
+      if (!existing || new Date(supabaseProfile.last_updated) > new Date(existing.last_updated)) {
+        profileMap.set(url, supabaseProfile);
+      }
+    });
+    
+    return Array.from(profileMap.values());
   };
 
   const updateLoadingProgress = (stage: typeof loadingStage, progress: number = 0, message: string = '') => {
@@ -287,7 +325,7 @@ function App() {
       for (const profileData of newProfilesData) {
         if (profileData.linkedinUrl) {
           try {
-            // Save to Supabase (central storage) - without user_id to avoid foreign key issues
+            // Save to Supabase (central storage)
             await SupabaseProfilesService.saveProfile(profileData, currentUser!.id);
             
             // Save to local storage (cache)
@@ -315,11 +353,77 @@ function App() {
     return results;
   };
 
+  const handleScrapeSelectedCommenterProfiles = async (profileUrls: string[]) => {
+    if (!currentUser || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const keys = LocalStorageService.getApifyKeys(currentUser.id);
+    const selectedKey = keys.find(k => k.id === selectedKeyId);
+
+    if (!selectedKey) {
+      alert('Invalid API key selected');
+      return;
+    }
+    
+    setIsScraping(true);
+    setScrapingType('profile_details');
+    setLoadingError('');
+    updateLoadingProgress('scraping_profiles', 25, `Checking and scraping ${profileUrls.length} selected profiles...`);
+    
+    // Create local job
+    const job = LocalStorageService.createJob(currentUser.id, 'profile_details', profileUrls.join(','));
+    setScrapingJobs(prev => [job, ...prev]);
+    
+    try {
+      const apifyService = createApifyService(selectedKey.apiKey);
+      const profilesData = await getProfilesWithOptimization(profileUrls, apifyService);
+      
+      updateLoadingProgress('saving_data', 75, 'Processing profile data...');
+      setProfileDetails(profilesData);
+      setPreviousView('comments');
+      setCurrentView('profile-table');
+      updateLoadingProgress('completed', 100, 'Selected profiles scraped successfully!');
+      
+      // Update job
+      const completedJob: LocalJob = {
+        ...job,
+        status: 'completed',
+        resultsCount: profilesData.length,
+        completedAt: new Date().toISOString()
+      };
+      LocalStorageService.saveJob(completedJob);
+      setScrapingJobs(prev => prev.map(j => j.id === job.id ? completedJob : j));
+      
+    } catch (error) {
+      console.error('❌ Error scraping selected profiles:', error);
+      let errorMessage = 'Unknown error occurred';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      setLoadingError(errorMessage);
+      updateLoadingProgress('error', 0, 'Failed to scrape selected profiles');
+      
+      // Update job with error
+      const failedJob: LocalJob = {
+        ...job,
+        status: 'failed',
+        errorMessage,
+        completedAt: new Date().toISOString()
+      };
+      LocalStorageService.saveJob(failedJob);
+      setScrapingJobs(prev => prev.map(j => j.id === job.id ? failedJob : j));
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
   const handleStoreSelectedProfiles = async (profilesToStore: any[], tags: string[]) => {
     if (!currentUser) return;
     
     try {
-      console.log('💾 Storing', profilesToStore.length, 'profiles');
+      console.log('💾 Storing', profilesToStore.length, 'profiles with tags:', tags);
       
       for (const profile of profilesToStore) {
         if (profile.linkedinUrl) {
@@ -340,11 +444,86 @@ function App() {
       const updatedProfiles = LocalStorageService.getLocalProfiles();
       setProfiles(updatedProfiles);
       
-      alert(`Successfully stored ${profilesToStore.length} profiles`);
+      alert(`Successfully stored ${profilesToStore.length} profiles${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}`);
       
     } catch (error) {
       console.error('❌ Error storing profiles:', error);
       alert('Error storing profiles. Please try again.');
+    }
+  };
+
+  const handleUpdateProfile = async (profileUrl: string) => {
+    if (!currentUser || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const keys = LocalStorageService.getApifyKeys(currentUser.id);
+    const selectedKey = keys.find(k => k.id === selectedKeyId);
+
+    if (!selectedKey) {
+      alert('Invalid API key selected');
+      return;
+    }
+
+    try {
+      const apifyService = createApifyService(selectedKey.apiKey);
+      const profilesData = await getProfilesWithOptimization([profileUrl], apifyService);
+      
+      if (profilesData.length > 0) {
+        // Refresh profiles list
+        await loadUserData(currentUser.id);
+        alert('Profile updated successfully!');
+      }
+    } catch (error) {
+      console.error('❌ Error updating profile:', error);
+      alert('Error updating profile. Please try again.');
+    }
+  };
+
+  const handleUpdateSelectedProfiles = async (profileUrls: string[]) => {
+    if (!currentUser || !selectedKeyId) {
+      alert('Please ensure you are signed in and have selected an API key');
+      return;
+    }
+
+    const keys = LocalStorageService.getApifyKeys(currentUser.id);
+    const selectedKey = keys.find(k => k.id === selectedKeyId);
+
+    if (!selectedKey) {
+      alert('Invalid API key selected');
+      return;
+    }
+
+    try {
+      const apifyService = createApifyService(selectedKey.apiKey);
+      await getProfilesWithOptimization(profileUrls, apifyService);
+      
+      // Refresh profiles list
+      await loadUserData(currentUser.id);
+      alert(`Successfully updated ${profileUrls.length} profiles!`);
+    } catch (error) {
+      console.error('❌ Error updating profiles:', error);
+      alert('Error updating profiles. Please try again.');
+    }
+  };
+
+  const handleDeleteSelectedProfiles = async (profileIds: string[]) => {
+    if (!currentUser) return;
+    
+    try {
+      // Remove from local storage
+      const currentProfiles = LocalStorageService.getLocalProfiles();
+      const filteredProfiles = currentProfiles.filter(p => !profileIds.includes(p.id));
+      LocalStorageService.saveLocalProfiles(filteredProfiles);
+      
+      // Update state
+      setProfiles(filteredProfiles);
+      
+      alert(`Successfully deleted ${profileIds.length} profiles`);
+    } catch (error) {
+      console.error('❌ Error deleting profiles:', error);
+      alert('Error deleting profiles. Please try again.');
     }
   };
 
@@ -364,11 +543,17 @@ function App() {
       setProfiles(localProfiles);
     } else if (tab === 'jobs') {
       setCurrentView('form');
+    } else if (tab === 'storage') {
+      setCurrentView('storage');
     }
   };
 
-  const handleExport = (format: string) => {
+  const handleExport = (format: string, selectedOnly: boolean = false) => {
     exportData(profiles, format, 'linkedin_profiles');
+  };
+
+  const handleExportProfileResults = (format: string) => {
+    exportData(profileDetails.map(profile => ({ profile_data: profile })), format, 'profile_results');
   };
 
   const handleBackToForm = () => {
@@ -480,6 +665,17 @@ function App() {
                   <Clock className="w-4 h-4 inline mr-2" />
                   Jobs ({scrapingJobs.length})
                 </button>
+                <button
+                  onClick={() => handleTabChange('storage')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    activeTab === 'storage'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }`}
+                >
+                  <HardDrive className="w-4 h-4 inline mr-2" />
+                  Storage
+                </button>
               </nav>
               
               {/* User Menu */}
@@ -533,153 +729,158 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* API Key Management */}
-        {(activeTab === 'scraper' && currentView === 'form') && (
-          <div className="mb-8">
-            <LocalApifyKeyManager
-              userId={currentUser.id}
-              selectedKeyId={selectedKeyId}
-              onKeySelect={handleKeySelect}
-            />
-          </div>
-        )}
-
-        {activeTab === 'scraper' && (
-          <div className="space-y-8">
-            {currentView === 'form' && (
-              <>
-                <ScrapingForm 
-                  onScrape={handleScrape} 
-                  isLoading={isScraping}
-                  disabled={isScrapingDisabled()}
+        {currentView === 'storage' ? (
+          <StorageManager />
+        ) : (
+          <>
+            {/* API Key Management */}
+            {(activeTab === 'scraper' && currentView === 'form') && (
+              <div className="mb-8">
+                <LocalApifyKeyManager
+                  userId={currentUser.id}
+                  selectedKeyId={selectedKeyId}
+                  onKeySelect={handleKeySelect}
                 />
-                
-                {isScraping && (
-                  <LoadingProgress
-                    type={scrapingType}
-                    stage={loadingStage}
-                    progress={loadingProgress}
-                    message={loadingMessage}
-                    error={loadingError}
-                  />
-                )}
-                
-                {/* Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-blue-100 rounded-lg">
-                        <Database className="w-5 h-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
-                        <div className="text-sm text-gray-600">Local Profiles</div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-green-100 rounded-lg">
-                        <Activity className="w-5 h-5 text-green-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{scrapingJobs.filter(j => j.status === 'completed').length}</div>
-                        <div className="text-sm text-gray-600">Completed Jobs</div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-white rounded-lg shadow p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-purple-100 rounded-lg">
-                        <Linkedin className="w-5 h-5 text-purple-600" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold text-gray-900">{commentersData.length}</div>
-                        <div className="text-sm text-gray-600">Last Comments</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {currentView === 'comments' && (
-              <CommentResults
-                comments={commentersData}
-                onScrapeSelectedProfiles={async (profileUrls) => {
-                  // Handle scraping selected profiles from comments
-                  await handleScrape('profile_details', profileUrls.join('\n'));
-                }}
-                isLoading={isScraping}
-                onBack={handleBackToForm}
-                loadingStage={loadingStage}
-                loadingProgress={loadingProgress}
-                loadingMessage={loadingMessage}
-                loadingError={loadingError}
-              />
-            )}
-
-            {currentView === 'profile-table' && (
-              <div className="space-y-6">
-                <ProfileResultsTable
-                  profiles={profileDetails}
-                  onViewDetails={handleViewProfileDetails}
-                  onExport={(format) => exportData(profileDetails.map(p => ({ profile_data: p })), format, 'profile_results')}
-                  onStoreSelectedProfiles={handleStoreSelectedProfiles}
-                  showActions={false}
-                  showStoreOption={true}
-                />
-                
-                <div className="flex justify-center">
-                  <button
-                    onClick={handleBackToPrevious}
-                    className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
-                  </button>
-                </div>
               </div>
             )}
 
-            {currentView === 'profile-details' && (
-              <ProfileDetailsDisplay
-                profiles={profileDetails}
-                onBack={handleBackToPrevious}
-              />
-            )}
-          </div>
-        )}
+            {activeTab === 'scraper' && (
+              <div className="space-y-8">
+                {currentView === 'form' && (
+                  <>
+                    <ScrapingForm 
+                      onScrape={handleScrape} 
+                      isLoading={isScraping}
+                      disabled={isScrapingDisabled()}
+                    />
+                    
+                    {isScraping && (
+                      <LoadingProgress
+                        type={scrapingType}
+                        stage={loadingStage}
+                        progress={loadingProgress}
+                        message={loadingMessage}
+                        error={loadingError}
+                      />
+                    )}
+                    
+                    {/* Stats */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-blue-100 rounded-lg">
+                            <Database className="w-5 h-5 text-blue-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{profiles.length}</div>
+                            <div className="text-sm text-gray-600">Local Profiles</div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-green-100 rounded-lg">
+                            <Activity className="w-5 h-5 text-green-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{scrapingJobs.filter(j => j.status === 'completed').length}</div>
+                            <div className="text-sm text-gray-600">Completed Jobs</div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white rounded-lg shadow p-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-purple-100 rounded-lg">
+                            <Linkedin className="w-5 h-5 text-purple-600" />
+                          </div>
+                          <div>
+                            <div className="text-2xl font-bold text-gray-900">{commentersData.length}</div>
+                            <div className="text-sm text-gray-600">Last Comments</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
 
-        {activeTab === 'profiles' && (
-          <>
-            {currentView === 'single-profile-details' ? (
-              <ProfileDetailsDisplay
-                profiles={selectedProfileForDetails ? [selectedProfileForDetails.profile_data] : []}
-                onBack={handleBackToProfilesList}
-              />
-            ) : (
-              <DataTable
-                profiles={profiles}
-                onUpdateProfile={async () => {}} // Disabled for local version
-                onExport={handleExport}
-                onViewDetails={(profile) => handleViewProfileDetails(profile)}
-                isUpdating={false}
+                {currentView === 'comments' && (
+                  <CommentResults
+                    comments={commentersData}
+                    onScrapeSelectedProfiles={handleScrapeSelectedCommenterProfiles}
+                    isLoading={isScraping}
+                    onBack={handleBackToForm}
+                    loadingStage={loadingStage}
+                    loadingProgress={loadingProgress}
+                    loadingMessage={loadingMessage}
+                    loadingError={loadingError}
+                  />
+                )}
+
+                {currentView === 'profile-table' && (
+                  <div className="space-y-6">
+                    <ProfileResultsTable
+                      profiles={profileDetails}
+                      onViewDetails={handleViewProfileDetails}
+                      onExport={handleExportProfileResults}
+                      onStoreSelectedProfiles={handleStoreSelectedProfiles}
+                      showActions={false}
+                      showStoreOption={true}
+                    />
+                    
+                    <div className="flex justify-center">
+                      <button
+                        onClick={handleBackToPrevious}
+                        className="px-6 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                      >
+                        {previousView === 'comments' ? 'Back to Comments' : 'Back to Scraper'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {currentView === 'profile-details' && (
+                  <ProfileDetailsDisplay
+                    profiles={profileDetails}
+                    onBack={handleBackToPrevious}
+                  />
+                )}
+              </div>
+            )}
+
+            {activeTab === 'profiles' && (
+              <>
+                {currentView === 'single-profile-details' ? (
+                  <ProfileDetailsDisplay
+                    profiles={selectedProfileForDetails ? [selectedProfileForDetails.profile_data] : []}
+                    onBack={handleBackToProfilesList}
+                  />
+                ) : (
+                  <DataTable
+                    profiles={profiles}
+                    onUpdateProfile={handleUpdateProfile}
+                    onUpdateSelectedProfiles={handleUpdateSelectedProfiles}
+                    onDeleteSelectedProfiles={handleDeleteSelectedProfiles}
+                    onExport={handleExport}
+                    onViewDetails={(profile) => handleViewProfileDetails(profile)}
+                    isUpdating={false}
+                  />
+                )}
+              </>
+            )}
+
+            {activeTab === 'jobs' && (
+              <LocalJobsTable 
+                jobs={scrapingJobs} 
+                onCancelJob={(jobId) => {
+                  // Refresh jobs after cancellation
+                  const updatedJobs = LocalStorageService.getJobs(currentUser.id);
+                  setScrapingJobs(updatedJobs);
+                }}
               />
             )}
           </>
-        )}
-
-        {activeTab === 'jobs' && (
-          <LocalJobsTable 
-            jobs={scrapingJobs} 
-            onCancelJob={(jobId) => {
-              // Refresh jobs after cancellation
-              const updatedJobs = LocalStorageService.getJobs(currentUser.id);
-              setScrapingJobs(updatedJobs);
-            }}
-          />
         )}
       </main>
     </div>
