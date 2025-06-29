@@ -6,13 +6,13 @@ export class SupabaseProfilesService {
     try {
       console.log('💾 Saving profile to Supabase:', profileData.linkedinUrl);
       
-      // Don't include user_id to avoid foreign key constraint issues
-      // Since we're using local authentication, we'll store profiles without user association
+      // Include user_id to satisfy the NOT NULL constraint
       const { error } = await supabase
         .from('linkedin_profiles')
         .upsert({
           linkedin_url: profileData.linkedinUrl || profileData.linkedin_url,
           profile_data: profileData,
+          user_id: userId, // Include the user_id to satisfy the NOT NULL constraint
           last_updated: new Date().toISOString(),
           tags: [] // Default empty tags
         }, {
