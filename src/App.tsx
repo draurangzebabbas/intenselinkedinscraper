@@ -61,20 +61,72 @@ function App() {
   const [loadingError, setLoadingError] = useState('');
   const [scrapingType, setScrapingType] = useState<'post_comments' | 'profile_details' | 'mixed'>('post_comments');
 
+  // Centralized auth and data loading function
+  const handleAuthAndDataLoad = async (authUser: any) => {
+    try {
+      setIsLoading(true);
+      
+      if (authUser) {
+        console.log('🔐 User authenticated:', authUser.id);
+        setUser(authUser);
+        
+        // Load user profile with retry logic
+        let retries = 3;
+        let userProfileData = null;
+        
+        while (retries > 0 && !userProfileData) {
+          try {
+            console.log('👤 Loading user profile, attempts remaining:', retries);
+            userProfileData = await getOrCreateUserProfile(authUser.id);
+            
+            if (userProfileData) {
+              console.log('✅ User profile loaded:', userProfileData.id);
+              setUserProfile(userProfileData);
+              
+              // Load user data
+              await loadUserData(userProfileData.id);
+              break;
+            }
+          } catch (error) {
+            console.error('❌ Error loading user profile (attempt', 4 - retries + 1, '):', error);
+            retries--;
+            
+            if (retries > 0) {
+              // Wait before retrying
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } else {
+              // Final attempt failed
+              console.error('❌ Failed to load user profile after all retries');
+              throw error;
+            }
+          }
+        }
+      } else {
+        console.log('🚪 User signed out');
+        setUser(null);
+        setUserProfile(null);
+        setProfiles([]);
+        setScrapingJobs([]);
+        setSelectedKeyId('');
+      }
+    } catch (error) {
+      console.error('❌ Error in auth and data loading:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Initialize app and auth listener
   useEffect(() => {
     const initializeAuth = async () => {
       try {
+        console.log('🚀 Initializing authentication...');
+        
         // Get initial session
         const { data: { session } } = await supabase.auth.getSession();
-        
-        if (session?.user) {
-          setUser(session.user);
-          await loadUserProfile(session.user.id);
-        }
+        await handleAuthAndDataLoad(session?.user || null);
       } catch (error) {
-        console.error('Error initializing auth:', error);
-      } finally {
+        console.error('❌ Error initializing auth:', error);
         setIsLoading(false);
       }
     };
@@ -83,33 +135,12 @@ function App() {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event, session?.user?.id);
-      
-      if (session?.user) {
-        setUser(session.user);
-        await loadUserProfile(session.user.id);
-      } else {
-        setUser(null);
-        setUserProfile(null);
-        setProfiles([]);
-        setScrapingJobs([]);
-      }
+      console.log('🔄 Auth state changed:', event, session?.user?.id);
+      await handleAuthAndDataLoad(session?.user || null);
     });
 
     return () => subscription.unsubscribe();
   }, []);
-
-  const loadUserProfile = async (authUserId: string) => {
-    try {
-      const profile = await getOrCreateUserProfile(authUserId);
-      if (profile) {
-        setUserProfile(profile);
-        await loadUserData(profile.id);
-      }
-    } catch (error) {
-      console.error('Error loading user profile:', error);
-    }
-  };
 
   const loadUserData = async (userId: string) => {
     try {
@@ -128,7 +159,8 @@ function App() {
         .order('created_at', { ascending: false });
 
       if (jobsError) {
-        console.error('Error loading jobs:', jobsError);
+        console.error('❌ Error loading jobs:', jobsError);
+        throw jobsError;
       } else {
         setScrapingJobs(jobs || []);
       }
@@ -136,6 +168,7 @@ function App() {
       console.log(`✅ Loaded ${userProfiles.length} profiles and ${jobs?.length || 0} jobs for user ${userId}`);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
+      throw error; // Re-throw so handleAuthAndDataLoad can catch it
     }
   };
 
@@ -783,7 +816,7 @@ function App() {
           <UserProfile user={user} onBack={handleBackToMain} />
         ) : (
           <>
-            {/* API Key Management */}
+            {/* API Key Management - Show on scraper tab when user is authenticated */}
             {(activeTab === 'scraper' && currentView === 'form' && userProfile) && (
               <div className="mb-8">
                 <ApifyKeyManager
